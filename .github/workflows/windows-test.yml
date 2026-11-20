@@ -89,7 +89,8 @@ jobs:
           Check 'hung installer stops at the time limit' ($out -match 'manual' -and $left -eq 0 -and $sw.Elapsed.TotalSeconds -lt 90) "$([int]$sw.Elapsed.TotalSeconds)s, processes left: $left"
 
           # 5. a standard user, twice. (a) FILEION_INSTALLER_ELEVATED=1 is the state after a declined prompt; (b) without it, the real path: the
-          #    installer asks Windows for elevation first. A headless runner cannot click UAC, so (b) asserts the attempt in the log and the message.
+          #    installer asks Windows for elevation first. A headless runner cannot click UAC: Windows accepts the request and leaves the prompt pending, so
+          #    (b) asserts the attempt in the log, a prompt-free return (no hang) and nothing installed; the message is asserted in (a), the state a declined prompt leaves.
           $pw = ConvertTo-SecureString 'Fileion-Test-9x!' -AsPlainText -Force
           New-LocalUser -Name ftestuser -Password $pw -AccountNeverExpires | Out-Null
           New-Item -ItemType Directory -Force C:\ftest\tmp | Out-Null
@@ -110,7 +111,8 @@ jobs:
             Copy-Item C:\ftest\tmp\fileion-installer.log "C:\ftest\out\$name.log" -ErrorAction SilentlyContinue
             $texts = ($o -match [regex]::Escape($msg)) -and ($o -match 'Log: ') -and ($o -match 'nothing was installed')
             $attempt = if ($variant -eq 'b') { $lg -match 'asking Windows for elevation' } else { $true }
-            Check "standard user ($variant): says admin rights are needed and nothing was installed" ($done -and $texts -and $attempt -and (-not (Key '{FILEION-TEST-4}')) -and $p.ExitCode -eq 1) "finished: $done, exit $(if ($p) {$p.ExitCode}), message: $texts, elevation attempt logged: $attempt, Uninstall key present: $(Key '{FILEION-TEST-4}')"
+            $ok = if ($variant -eq 'a') { $texts -and $p.ExitCode -eq 1 } else { $true }
+            Check "standard user ($variant): $(if ($variant -eq 'a') {'says admin rights are needed and nothing was installed'} else {'asks for elevation, returns, installs nothing'})" ($done -and $ok -and $attempt -and (-not (Key '{FILEION-TEST-4}'))) "finished: $done, exit $(if ($p) {$p.ExitCode}), message: $texts, elevation attempt logged: $attempt, Uninstall key present: $(Key '{FILEION-TEST-4}')"
           }
           Remove-Item Env:FILEION_INSTALLER_ELEVATED -ErrorAction SilentlyContinue
           $env:TEMP = $env:RUNNER_TEMP
