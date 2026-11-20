@@ -46,14 +46,6 @@ func main() {
 		os.Exit(2)
 	}
 
-	// Windows: one permission prompt up front, so every app installs for everyone and none asks again
-	if osName == "windows" && !sys.IsAdmin() && os.Getenv("FILEION_INSTALLER_ELEVATED") != "1" {
-		os.Setenv("FILEION_INSTALLER_ELEVATED", "1")
-		if err := sys.RelaunchAsAdmin(os.Args[1:]); err == nil {
-			return
-		}
-	}
-
 	logPath := filepath.Join(os.TempDir(), "fileion-installer.log")
 	lf, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
@@ -62,6 +54,18 @@ func main() {
 	defer lf.Close()
 	logger := log.New(lf, "", log.LstdFlags)
 	logger.Printf("start: version %s, code %s, %s", version, *code, osName)
+
+	// Windows: one permission prompt up front, so every app installs for everyone and none asks again
+	needAdmin := osName == "windows" && !sys.IsAdmin()
+	if needAdmin && os.Getenv("FILEION_INSTALLER_ELEVATED") != "1" {
+		logger.Printf("not an administrator: asking Windows for elevation")
+		os.Setenv("FILEION_INSTALLER_ELEVATED", "1")
+		err := sys.RelaunchAsAdmin(os.Args[1:])
+		if err == nil {
+			return
+		}
+		logger.Printf("elevation failed: %v", err)
+	}
 
 	win, url, err := ui.New(logPath, osName == "windows")
 	if err != nil {
@@ -77,6 +81,18 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() { <-win.Closed; cancel() }()
+
+	if needAdmin {
+		msg := "Administrator rights are needed to install apps, so nothing was installed. Run this file again and choose Yes at the permission prompt."
+		logger.Printf("stopped: %s", msg)
+		win.Note(msg)
+		win.Finish(0, 0)
+		if *noWindow {
+			fmt.Printf("%s\nLog: %s\n", msg, logPath)
+		}
+		waitForClose(win, *noWindow)
+		os.Exit(1)
+	}
 
 	client := run.DefaultClient()
 	fetchCtx, stop := context.WithTimeout(ctx, 30*time.Second)
