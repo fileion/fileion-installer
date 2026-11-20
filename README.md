@@ -20,18 +20,21 @@ Windows asks for administrator permission once at the start, so every app instal
 
 ## Privacy
 
-The installer sends Fileion **one anonymous count** at the end of a run, to `software.fileion.com`: how many apps worked and how many did not. Nothing else: no name, account, app list, computer detail or other identifier. The only other network traffic is the app list (the manifest) from software.fileion.com and each app's download from its vendor.
+Two requests go to `software.fileion.com`, and each app is then downloaded from its vendor.
 
-The progress window shows this in one line, with a **Don't send** box and a Privacy link. The count is sent by default, only when the run ends, and only if the box is not ticked. To turn it off for good, run the file with `-no-report`. Full policy: [fileion.com/privacy-policy](https://fileion.com/privacy-policy).
+- **The app list.** The installer asks for your list. The set code in the file name is part of that request's address and stands for the apps you picked, so, like with any page request, Fileion's server can tell which set was fetched.
+- **One anonymous count** at the end of a run: how many apps worked and how many did not. The count carries no set code, app name, computer or user identifier.
+
+The progress window shows the count in one line, with a **Don't send** box and a Privacy link. It is sent by default, only when the run ends, and only if the box is not ticked. To turn it off for good, run the file with `-no-report`. Full policy: [fileion.com/privacy-policy](https://fileion.com/privacy-policy).
 
 ## Code signing policy
 
-Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org)
+Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org) (applied for; this release is not signed yet)
 
 - Committers and reviewers: [sjsiam](https://github.com/sjsiam)
 - Approvers: [sjsiam](https://github.com/sjsiam)
 
-Until the application to SignPath Foundation is approved, the `.exe` is unsigned and Windows SmartScreen may warn on first run. Releases are built from this repository by GitHub Actions, and the build is reproducible (see Build), so anyone can compare the SHA-256 of a release file with their own build.
+Until the application to SignPath Foundation is approved, the `.exe` is unsigned and Windows SmartScreen may warn on first run. Releases are built from this repository by GitHub Actions. The `.exe` and the Linux binary are reproducible (see Build), so anyone can compare their SHA-256 with their own build; the AppImage packing may differ byte for byte.
 
 ## Build
 
@@ -42,7 +45,7 @@ go vet ./... && go test ./...
 ./build.sh 1.0.0        # dist/Fileion-Installer.exe, dist/Fileion-Installer, dist/SHA256SUMS
 ```
 
-The build is reproducible: `CGO_ENABLED=0`, `-trimpath`, `-buildvcs=false`, no build ID, and `SOURCE_DATE_EPOCH` fixed. The same source with the same Go version gives the same bytes, so anyone can rebuild and compare SHA-256.
+The `.exe` and the Linux binary build reproducibly: `CGO_ENABLED=0`, `-trimpath`, `-buildvcs=false`, no build ID, and `SOURCE_DATE_EPOCH` fixed. The same source with the same Go version gives the same bytes, so anyone can rebuild and compare SHA-256.
 
 The window is a small page served on `127.0.0.1` (random port and path, Host-checked) and opened in its own app-style window of Edge (Windows) or a Chromium browser (Linux; the default browser otherwise). That keeps the program free of GUI libraries.
 
