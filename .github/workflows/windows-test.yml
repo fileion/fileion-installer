@@ -403,9 +403,11 @@ jobs:
     steps:
       - name: Download, check the SHA-256, install silently, look in the Uninstall registry
         run: |
+          # "hive|key name|DisplayName|DisplayVersion" for every Uninstall entry: HKLM 64-bit, HKLM 32-bit (WOW6432Node), HKCU
           function Entries {
-            $paths = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*', 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*'
-            Get-ItemProperty $paths -ErrorAction SilentlyContinue | Where-Object DisplayName | ForEach-Object { "$($_.PSChildName)|$($_.DisplayName)|$($_.DisplayVersion)" }
+            foreach ($h in @(@('HKLM64', 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall'), @('HKLM32', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'), @('HKCU', 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall'))) {
+              Get-ItemProperty "$($h[1])\*" -ErrorAction SilentlyContinue | Where-Object DisplayName | ForEach-Object { "$($h[0])|$($_.PSChildName)|$($_.DisplayName)|$($_.DisplayVersion)" }
+            }
           }
           $file = Join-Path $env:RUNNER_TEMP 'installer-file.exe'
           # Same rewrite as run.DirectURL in the installer: a SourceForge /download page becomes the direct mirror link
@@ -452,8 +454,13 @@ jobs:
           merge-multiple: false
       - run: |
           jq -s '.' results/*/result.json > all-results.json
+          # one line per new Uninstall entry: app, hive, key name, DisplayName, DisplayVersion
+          { printf 'app\thive\tkey\tdisplay_name\tdisplay_version\n'; jq -r '.[] | .name as $n | .new_uninstall_entries[]? | [$n] + split("|") | @tsv' all-results.json; } > uninstall-keys.tsv
+          cat uninstall-keys.tsv >> "$GITHUB_STEP_SUMMARY"
           jq -r '.[] | [.name, (if .pass then "PASS" else "FAIL" end), (.seconds|tostring) + "s", (.new_uninstall_entries | join(" ; "))] | @tsv' all-results.json | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
         with:
           name: type-default-results
-          path: all-results.json
+          path: |
+            all-results.json
+            uninstall-keys.tsv
