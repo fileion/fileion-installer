@@ -59,7 +59,7 @@ jobs:
           cp dist/Fileion-Installer AppDir/usr/bin/fileion-installer
           cp packaging/AppRun AppDir/AppRun && chmod +x AppDir/AppRun
           cp packaging/fileion-installer.desktop AppDir/
-          printf '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#1d4ed8"/></svg>' > AppDir/fileion-installer.svg
+          cp packaging/fileion-installer.png AppDir/fileion-installer.png && cp packaging/fileion-installer.png AppDir/.DirIcon
           curl -fsSL -o appimagetool "https://github.com/AppImage/appimagetool/releases/download/1.9.0/appimagetool-x86_64.AppImage"
           echo "46fdd785094c7f6e545b61afcfb0f3d98d8eab243f644b4b17698c01d06083d1  appimagetool" | sha256sum -c -
           chmod +x appimagetool

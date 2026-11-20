@@ -1,7 +1,7 @@
 // Command mkicon draws the Fileion mark (a purple rounded square with a white N: the first three paths of
 // public/assets/images/logo/logo.svg in the Fileion site) and writes winres/icon.ico with 16, 24, 32, 48, 64 and 256 px images.
-// With a second argument (a folder) it also writes icon-32.png, icon-64.png, icon-192.png and icon-512.png for the progress window's favicon and
-// web manifest, so the window and the .exe show the same mark.
+// With a second argument (a folder) it also writes icon-32.png, icon-64.png, icon-192.png, icon-256.png and icon-512.png for the progress window's favicon and
+// web manifest and the AppImage icon (icon-256.png becomes packaging/fileion-installer.png), so the window, the AppImage and the .exe show the same mark.
 // Standard library only, so the icon is reproducible from this file: go run ./tools/mkicon winres/icon.ico internal/ui
 package main
 
@@ -77,7 +77,7 @@ func main() {
 		os.Exit(2)
 	}
 	if len(os.Args) == 3 {
-		for _, s := range []int{32, 64, 192, 512} {
+		for _, s := range []int{32, 64, 192, 256, 512} {
 			var b bytes.Buffer
 			enc := png.Encoder{CompressionLevel: png.BestCompression}
 			if err := enc.Encode(&b, render(s)); err != nil {
