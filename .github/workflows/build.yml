@@ -1,5 +1,5 @@
 # Tests, then builds the Windows .exe and the Linux AppImage reproducibly. Only GitHub's own actions, pinned to commit SHAs.
-# Signing: the Windows .exe is not signed yet. A SignPath step is added here once SignPath Foundation approves the project.
+# Signing: the Windows .exe and the AppImage are unsigned for now.
 name: build
 on:
   push:

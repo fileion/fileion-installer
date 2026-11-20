@@ -9,7 +9,7 @@ A small program that installs the apps you picked at [software.fileion.com/setup
 3. For each app:
    - **Windows:** skips it when it is already installed at the listed version (the product code under the Windows Uninstall registry keys); otherwise downloads the file **from the vendor's own https address only**, checks its SHA-256 against the vendor's, and runs it with the silent switch. If the SHA-256 does not match, the file is **not run**, it is deleted and the window says so.
    - **Linux:** installs it from Flathub with Flatpak, or updates it when Flatpak already has it.
-4. Shows a plain progress window: one line per app, a link to the log, a Close button, and the SignPath credit.
+4. Shows a plain progress window: one line per app, a link to the log, a Close button and a Privacy link.
 5. Sends **one anonymous count** at the end: how many apps worked and how many did not. No name, IP-linked id, app list or computer detail is sent. Tick "Don't send" in the window, or use `-no-report`, to send nothing (see Privacy).
 
 An installer that shows its own setup window or hangs is stopped after a time limit (10 minutes, `-app-timeout`) and marked "Skipped: needs manual install", with a link to the app's Fileion download page. The SHA-256 check always runs first, before anything is started.
@@ -29,12 +29,7 @@ The progress window shows the count in one line, with a **Don't send** box and a
 
 ## Code signing policy
 
-Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org) (applied for; this release is not signed yet)
-
-- Committers and reviewers: [sjsiam](https://github.com/sjsiam)
-- Approvers: [sjsiam](https://github.com/sjsiam)
-
-Until the application to SignPath Foundation is approved, the `.exe` is unsigned and Windows SmartScreen may warn on first run. Releases are built from this repository by GitHub Actions. The `.exe` and the Linux binary are reproducible (see Build), so anyone can compare their SHA-256 with their own build; the AppImage packing may differ byte for byte.
+Releases are currently unsigned, so Windows SmartScreen may warn on first run (choose "More info", then "Run anyway"). They are built reproducibly by GitHub Actions from this repository: the `.exe` and the Linux binary are reproducible (see Build), so anyone can compare their SHA-256 with their own build; the AppImage packing may differ byte for byte.
 
 ## Build
 
@@ -49,13 +44,11 @@ The `.exe` and the Linux binary build reproducibly: `CGO_ENABLED=0`, `-trimpath`
 
 The window is a small page served on `127.0.0.1` (random port and path, Host-checked) and opened in its own app-style window of Edge (Windows) or a Chromium browser (Linux; the default browser otherwise). That keeps the program free of GUI libraries.
 
-### Code signing (SignPath Foundation)
+### Build pipeline
 
-The application for free code signing from SignPath Foundation is pending. Until it is approved the `.exe` is unsigned, so Windows SmartScreen may warn on first run. `.github/workflows/build.yml` builds, tests and packs both files with GitHub's own actions only; the SignPath step is added to it once the project is approved. The Linux AppImage is not signed.
+`.github/workflows/build.yml` builds, tests and packs both files with GitHub's own actions only. The `.exe` and the Linux AppImage are not signed.
 
 Evidence runs on a real Windows machine: `.github/workflows/windows-test.yml` (manual) runs the installer against a local test manifest (install, re-run, wrong SHA-256, hung installer, no admin) and silent-installs a list of vendor installers, reporting for each whether it shows in the Uninstall registry.
-
-Free code signing provided by SignPath.io, certificate by SignPath Foundation.
 
 ### Options
 
@@ -77,5 +70,5 @@ Free code signing provided by SignPath.io, certificate by SignPath Foundation.
 
 1. Windows 10/11 VM, no admin user logged in is fine (the prompt appears). Download a file from the page once the switch is on, or rename a build to `Fileion-7-Zip-<code>.exe` with a real code.
 2. Run it: expect the permission prompt, then the window listing each app. Check: installed, "Up to date" on a second run, a deliberately wrong SHA-256 shows "Skipped" and nothing runs, an app with its own setup window is stopped at the limit (try `-app-timeout 30s`) with a Fileion link.
-3. Check `%TEMP%\fileion-installer.log`, that downloaded files are gone from `%TEMP%`, and that SmartScreen shows SignPath Foundation once signed.
+3. Check `%TEMP%\fileion-installer.log`, that downloaded files are gone from `%TEMP%`, and that SmartScreen shows its "unrecognized app" warning (the build is unsigned).
 4. Edge must exist (it ships with Windows 10/11); without it the default browser opens the page.
