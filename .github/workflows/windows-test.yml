@@ -542,10 +542,12 @@ jobs:
           # Same rewrite as run.DirectURL in the installer: a SourceForge /download page becomes the direct mirror link
           $url = $env:APP_URL
           if ($url -match '^https://(www\.)?sourceforge\.net/projects/([^/]+)/files/(.+?)(/download)?/?$') { $url = "https://downloads.sourceforge.net/project/$($Matches[2])/$($Matches[3])" }
-          $resp = Invoke-WebRequest -Uri $url -UserAgent 'Fileion-Installer' -OutFile $file -MaximumRetryCount 3 -RetryIntervalSec 5 -PassThru
+          # curl.exe streams to the file: Invoke-WebRequest -PassThru kept the whole body in memory and died with "Insufficient memory" on the 1 GB+ downloads (Android Studio, 0 A.D)
+          $meta = (curl.exe -sSL --fail --retry 3 --retry-delay 5 -A 'Fileion-Installer' -o $file -w '%{url_effective}|%{content_type}' $url) -split '\|', 2
+          if ($LASTEXITCODE -ne 0) { Write-Error "download failed (curl exit $LASTEXITCODE) from $url"; exit 1 }
           $actual = (Get-FileHash $file -Algorithm SHA256).Hash.ToLower()
           $hashOk = $actual -eq $env:APP_SHA256.ToLower()
-          $received = [ordered]@{ final_url = $resp.BaseResponse.RequestMessage.RequestUri.AbsoluteUri; content_type = $resp.Headers['Content-Type'] -join ','; size = (Get-Item $file).Length }
+          $received = [ordered]@{ final_url = $meta[0]; content_type = $meta[1]; size = (Get-Item $file).Length }
           $before = @(Entries)
           $timedOut = $false; $exit = $null; $sw = [Diagnostics.Stopwatch]::StartNew()
           if ($hashOk) {
