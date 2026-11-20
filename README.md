@@ -33,7 +33,9 @@ The window is a small page served on `127.0.0.1` (random port and path, Host-che
 
 ### Code signing (SignPath Foundation)
 
-`.github/workflows/build.yml` builds on GitHub Actions and, on a version tag, submits the unsigned `.exe` to SignPath for signing. Signed files show **SignPath Foundation** as the publisher. Set the two `CHANGE-ME` ids and the `SIGNPATH_API_TOKEN` secret first. The Linux AppImage is not signed.
+The application for free code signing from SignPath Foundation is pending. Until it is approved the `.exe` is unsigned, so Windows SmartScreen may warn on first run. `.github/workflows/build.yml` builds, tests and packs both files with GitHub's own actions only; the SignPath step is added to it once the project is approved. The Linux AppImage is not signed.
+
+Evidence runs on a real Windows machine: `.github/workflows/windows-test.yml` (manual) runs the installer against a local test manifest (install, re-run, wrong SHA-256, hung installer, no admin) and silent-installs a list of vendor installers, reporting for each whether it shows in the Uninstall registry.
 
 Free code signing provided by SignPath.io, certificate by SignPath Foundation.
 

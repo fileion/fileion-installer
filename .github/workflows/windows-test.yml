@@ -1,0 +1,177 @@
+# Manual evidence run on a real Windows machine. Nothing here sets anything on fileion.com.
+# Job 1 runs the installer against a local https test manifest. Job 2 runs real vendor installers silently (one matrix job each).
+name: windows-test
+on:
+  workflow_dispatch:
+    inputs:
+      apps:
+        description: 'JSON list of {name, url, sha256, switch, timeout, type}; timeout in seconds, type optional (msi/wix runs through msiexec)'
+        required: false
+        default: '[{"name":"7-Zip","url":"https://www.7-zip.org/a/7z2501-x64.exe","sha256":"78afa2a1c773caf3cf7edf62f857d2a8a5da55fb0fff5da416074c0d28b2b55f","switch":"/S","timeout":300},{"name":"Notepad++","url":"https://github.com/notepad-plus-plus/notepad-plus-plus/releases/download/v8.9.9.1/npp.8.9.9.1.Installer.x64.exe","sha256":"ce3267f5c4e7e42f847e00f4b20234da6150647203033cdde34a69593efc3152","switch":"/S","timeout":300},{"name":"VLC","url":"https://get.videolan.org/vlc/last/win64/vlc-3.0.24-win64.exe","sha256":"d711e1e1fe52052748c39080c7dce63f6b7e4c315efedf1774a3f1957b782ff3","switch":"/S","timeout":600}]'
+permissions:
+  contents: read
+jobs:
+  installer:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@3041bf56c941b39c61721a86cd11f3bb1338122a # v5.2.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Build the installer, a fake app and the test server
+        run: |
+          New-Item -ItemType Directory -Force C:\ftest\www\setup\manifest, C:\ftest\out | Out-Null
+          go build -o C:\ftest\Fileion-Test-and-1-more-aaaa1111.exe .
+          go build -o C:\ftest\www\fakeapp.exe ./tools/fakeapp
+          go build -o C:\ftest\testserver.exe ./tools/testserver
+      - name: Trust a throwaway certificate and start the test server
+        run: |
+          & "$env:ProgramFiles\Git\usr\bin\openssl.exe" req -x509 -newkey rsa:2048 -nodes -keyout C:\ftest\key.pem -out C:\ftest\cert.pem -days 1 -subj "/CN=localhost" -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" 2>$null
+          certutil -addstore -f Root C:\ftest\cert.pem | Out-Null
+          Start-Process C:\ftest\testserver.exe -ArgumentList '-addr','127.0.0.1:8443','-dir','C:\ftest\www','-cert','C:\ftest\cert.pem','-key','C:\ftest\key.pem' -RedirectStandardError C:\ftest\out\server.log -WindowStyle Hidden
+          Start-Sleep 3
+      - name: Write the test manifests
+        run: |
+          $sha = (Get-FileHash C:\ftest\www\fakeapp.exe -Algorithm SHA256).Hash.ToLower()
+          function App($id, $name, $code, $switch, $hash) {
+            @{ id = $id; name = $name; version = '1.0'; min_version = '1.0'; url = 'https://localhost:8443/fakeapp.exe'; sha256 = $hash
+               installer_type = 'exe'; architecture = 'x64'; silent_switch = $switch; product_code = $code; winget_id = "Test.$id"; page = "https://software.fileion.com/test-$id" }
+          }
+          function Write-Manifest($code, $apps) {
+            @{ code = $code; os = 'windows'; apps = @($apps) } | ConvertTo-Json -Depth 5 | Set-Content "C:\ftest\www\setup\manifest\$code" -Encoding utf8
+          }
+          Write-Manifest 'aaaa1111' (App 1 'Test Install' '{FILEION-TEST-1}' '/S /CODE={FILEION-TEST-1}' $sha)
+          Write-Manifest 'bbbb2222' (App 2 'Test Wrong Hash' '{FILEION-TEST-2}' '/S /CODE={FILEION-TEST-2}' ('0' * 64))
+          Write-Manifest 'cccc3333' (App 3 'Test Hang' '{FILEION-TEST-3}' '/HANG' $sha)
+          Write-Manifest 'dddd4444' (App 4 'Test No Admin' '{FILEION-TEST-4}' '/S /CODE={FILEION-TEST-4}' $sha)
+      - name: Run the cases
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $fail = @()
+          $rows = @()
+          function Key($code) { Test-Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$code" }
+          function Check($name, $ok, $detail) {
+            $script:rows += "| $name | $(if ($ok) {'PASS'} else {'FAIL'}) | $detail |"
+            if (-not $ok) { $script:fail += $name }
+          }
+          $installer = 'C:\ftest\Fileion-Test-and-1-more-aaaa1111.exe'
+          $env:FILEION_INSTALLER_ELEVATED = '1'   # the runner is already an administrator: skip the permission prompt
+          $common = @('-base', 'https://localhost:8443', '-no-window', '-no-report')
+
+          # 1. install, with the code read from the file name
+          $out = & $installer @common 2>&1 | Out-String; $code1 = $LASTEXITCODE
+          $out | Set-Content C:\ftest\out\case1-install.txt
+          Check 'install (code from file name)' ((Key '{FILEION-TEST-1}') -and $code1 -eq 0 -and $out -match 'done') "exit $code1, Uninstall key present: $(Key '{FILEION-TEST-1}')"
+
+          # 2. run again: it must skip what is installed (no second download)
+          $before = (Select-String -Path C:\ftest\out\server.log -Pattern 'fakeapp' -ErrorAction SilentlyContinue | Measure-Object).Count
+          $out = & $installer @common 2>&1 | Out-String; $code2 = $LASTEXITCODE
+          $out | Set-Content C:\ftest\out\case2-rerun.txt
+          Check 're-run skips the installed app' ($code2 -eq 0 -and $out -match 'up-to-date') "exit $code2"
+
+          # 3. wrong SHA-256: it must refuse and install nothing
+          $out = & $installer @common '-code' 'bbbb2222' 2>&1 | Out-String; $code3 = $LASTEXITCODE
+          $out | Set-Content C:\ftest\out\case3-sha-mismatch.txt
+          Check 'wrong SHA-256 is refused' ((-not (Key '{FILEION-TEST-2}')) -and $code3 -eq 1 -and $out -match 'mismatch') "exit $code3, Uninstall key present: $(Key '{FILEION-TEST-2}')"
+
+          # 4. a hung installer: stopped at -app-timeout, nothing left running
+          $sw = [Diagnostics.Stopwatch]::StartNew()
+          $out = & $installer @common '-code' 'cccc3333' '-app-timeout' '20s' 2>&1 | Out-String; $code4 = $LASTEXITCODE
+          $sw.Stop()
+          $out | Set-Content C:\ftest\out\case4-hang.txt
+          $left = @(Get-Process -Name fakeapp -ErrorAction SilentlyContinue).Count
+          Check 'hung installer stops at the time limit' ($out -match 'manual' -and $left -eq 0 -and $sw.Elapsed.TotalSeconds -lt 90) "$([int]$sw.Elapsed.TotalSeconds)s, processes left: $left"
+
+          # 5. without admin: a standard user, so the HKLM write fails; it must report that, not crash or hang
+          $pw = ConvertTo-SecureString 'Fileion-Test-9x!' -AsPlainText -Force
+          New-LocalUser -Name ftestuser -Password $pw -AccountNeverExpires | Out-Null
+          icacls C:\ftest /grant 'ftestuser:(OI)(CI)F' /T | Out-Null
+          $cred = New-Object Management.Automation.PSCredential('ftestuser', $pw)
+          $p = Start-Process $installer -ArgumentList ($common + @('-code', 'dddd4444', '-app-timeout', '60s')) -Credential $cred -WorkingDirectory C:\ftest `
+               -RedirectStandardOutput C:\ftest\out\case5-no-admin.txt -RedirectStandardError C:\ftest\out\case5-no-admin.err -PassThru -WindowStyle Hidden -ErrorAction Continue
+          $done = $p -and $p.WaitForExit(120000)
+          $o5 = (Get-Content C:\ftest\out\case5-no-admin.txt -Raw -ErrorAction SilentlyContinue)
+          Check 'run without admin reports a failure, no crash or hang' ($done -and (-not (Key '{FILEION-TEST-4}')) -and $o5 -match 'failed') "finished: $done, exit $(if ($p) {$p.ExitCode}), Uninstall key present: $(Key '{FILEION-TEST-4}')"
+
+          Copy-Item "$env:TEMP\fileion-installer.log" C:\ftest\out\installer.log -ErrorAction SilentlyContinue
+          "### Installer cases`n| Case | Result | Detail |`n|---|---|---|`n$($rows -join "`n")" | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          if ($fail.Count) { Write-Error "Failed: $($fail -join '; ')"; exit 1 }
+      - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        if: always()
+        with:
+          name: installer-cases
+          path: C:\ftest\out\
+
+  type-default:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        app: ${{ fromJSON(inputs.apps) }}
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      APP_NAME: ${{ matrix.app.name }}
+      APP_URL: ${{ matrix.app.url }}
+      APP_SHA256: ${{ matrix.app.sha256 }}
+      APP_SWITCH: ${{ matrix.app.switch }}
+      APP_TIMEOUT: ${{ matrix.app.timeout }}
+      APP_TYPE: ${{ matrix.app.type }}
+    steps:
+      - name: Download, check the SHA-256, install silently, look in the Uninstall registry
+        run: |
+          function Entries {
+            $paths = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*', 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*'
+            Get-ItemProperty $paths -ErrorAction SilentlyContinue | Where-Object DisplayName | ForEach-Object { "$($_.PSChildName)|$($_.DisplayName)|$($_.DisplayVersion)" }
+          }
+          $file = Join-Path $env:RUNNER_TEMP 'installer-file.exe'
+          Invoke-WebRequest -Uri $env:APP_URL -OutFile $file -MaximumRetryCount 3 -RetryIntervalSec 5
+          $actual = (Get-FileHash $file -Algorithm SHA256).Hash.ToLower()
+          $hashOk = $actual -eq $env:APP_SHA256.ToLower()
+          $before = @(Entries)
+          $timedOut = $false; $exit = $null; $sw = [Diagnostics.Stopwatch]::StartNew()
+          if ($hashOk) {
+            $limit = if ($env:APP_TIMEOUT) { [int]$env:APP_TIMEOUT } else { 300 }
+            if ($env:APP_TYPE -in 'msi', 'wix') { $exe = 'msiexec'; $argv = "/i `"$file`" $env:APP_SWITCH" } else { $exe = $file; $argv = $env:APP_SWITCH }
+            $p = if ($argv) { Start-Process $exe -ArgumentList $argv -PassThru -WindowStyle Hidden } else { Start-Process $exe -PassThru -WindowStyle Hidden }
+            if (-not $p.WaitForExit($limit * 1000)) { $timedOut = $true; taskkill /T /F /PID $p.Id | Out-Null } else { $exit = $p.ExitCode }
+            Start-Sleep 5
+          }
+          $sw.Stop()
+          $new = @(Entries | Where-Object { $before -notcontains $_ })
+          $pass = $hashOk -and (-not $timedOut) -and ($exit -in 0, 3010) -and $new.Count -gt 0
+          $result = [ordered]@{ name = $env:APP_NAME; url = $env:APP_URL; sha256_expected = $env:APP_SHA256; sha256_actual = $actual; sha256_match = $hashOk
+            switch = $env:APP_SWITCH; exit_code = $exit; timed_out = $timedOut; seconds = [int]$sw.Elapsed.TotalSeconds
+            shows_in_uninstall_registry = ($new.Count -gt 0); new_uninstall_entries = $new; pass = $pass }
+          New-Item -ItemType Directory -Force out | Out-Null
+          $result | ConvertTo-Json -Depth 4 | Set-Content out\result.json
+          "| $($env:APP_NAME) | $(if ($pass) {'PASS'} else {'FAIL'}) | SHA-256 match: $hashOk | exit: $exit | timed out: $timedOut | Uninstall entries added: $($new.Count) |" | Add-Content $env:GITHUB_STEP_SUMMARY
+          if (-not $pass) { exit 1 }
+      - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        if: always()
+        with:
+          name: result-${{ strategy.job-index }}
+          path: out/result.json
+          if-no-files-found: warn
+  report:
+    needs: type-default
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          pattern: result-*
+          path: results
+          merge-multiple: false
+      - run: jq -s '.' results/*/result.json > all-results.json && jq -r '.[] | "\(.name): \(if .pass then "PASS" else "FAIL" end), Uninstall registry: \(.shows_in_uninstall_registry)"' all-results.json
+      - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: type-default-results
+          path: all-results.json
