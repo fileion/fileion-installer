@@ -9,8 +9,8 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
-	"time"
 	"syscall"
+	"time"
 	"unicode/utf16"
 	"unsafe"
 
