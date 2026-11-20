@@ -29,7 +29,7 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      - name: Build twice and compare (reproducible: -trimpath, no build ID, no VCS stamp)
+      - name: Build twice and compare (reproducible, -trimpath, no build ID, no VCS stamp)
         run: |
           V="${GITHUB_REF_NAME//\//-}"
           ./build.sh "$V" > /dev/null && cp dist/SHA256SUMS first.sums

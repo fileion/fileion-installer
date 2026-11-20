@@ -185,7 +185,9 @@ jobs:
           pattern: result-*
           path: results
           merge-multiple: false
-      - run: jq -s '.' results/*/result.json > all-results.json && jq -r '.[] | "\(.name): \(if .pass then "PASS" else "FAIL" end), Uninstall registry: \(.shows_in_uninstall_registry)"' all-results.json
+      - run: |
+          jq -s '.' results/*/result.json > all-results.json
+          jq -r '.[] | [.name, (if .pass then "PASS" else "FAIL" end), (.seconds|tostring) + "s", (.new_uninstall_entries | join(" ; "))] | @tsv' all-results.json | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
         with:
           name: type-default-results
