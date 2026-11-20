@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"fileion-installer/internal/manifest"
 )
@@ -19,6 +20,7 @@ func sum(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(h[:
 type spy struct {
 	execs [][]string
 	hits  int
+	hang  bool
 }
 
 func newRunner(t *testing.T, srv *httptest.Server, installed func(manifest.App) (string, bool), s *spy) *Runner {
@@ -29,6 +31,10 @@ func newRunner(t *testing.T, srv *httptest.Server, installed func(manifest.App) 
 		Installed: installed,
 		Exec: func(ctx context.Context, name string, args []string) error {
 			s.execs = append(s.execs, append([]string{name}, args...))
+			if s.hang {
+				<-ctx.Done() // an installer that shows its own window and waits for a click
+				return ctx.Err()
+			}
 			return nil
 		},
 	}
@@ -166,5 +172,42 @@ func TestAtLeast(t *testing.T) {
 		if got := AtLeast(c.have, c.min); got != c.want {
 			t.Errorf("AtLeast(%q, %q) = %v, want %v", c.have, c.min, got, c.want)
 		}
+	}
+}
+
+func TestAnInstallerThatHangsIsStoppedAndMarkedManualWithItsFileionPage(t *testing.T) {
+	body := []byte("setup with its own window")
+	s := &spy{hang: true}
+	srv := server(t, body, s)
+	r := newRunner(t, srv, notInstalled, s)
+	r.AppTimeout = 50 * time.Millisecond
+	a := app(srv, sum(body))
+	a.Page = "https://example.fileion.com/windows"
+
+	start := time.Now()
+	res := r.RunApp(context.Background(), a)
+
+	if res.Status != Manual || res.OK() || res.Bad() {
+		t.Fatalf("status = %s, want manual (neither worked nor failed)", res.Status)
+	}
+	if res.Link != a.Page || !strings.Contains(res.Message, "needs manual install") {
+		t.Errorf("link %q, message %q", res.Link, res.Message)
+	}
+	if time.Since(start) > 5*time.Second {
+		t.Errorf("took %v: the limit did not stop it", time.Since(start))
+	}
+	if left, _ := filepath.Glob(filepath.Join(r.TempDir, "*")); len(left) != 0 {
+		t.Errorf("the installer file was kept: %v", left)
+	}
+}
+
+func TestTheHashCheckRunsBeforeAnythingIsStartedEvenWithATimeoutSet(t *testing.T) {
+	s := &spy{hang: true}
+	srv := server(t, []byte("wrong"), s)
+	r := newRunner(t, srv, notInstalled, s)
+	r.AppTimeout = 50 * time.Millisecond
+
+	if res := r.RunApp(context.Background(), app(srv, sum([]byte("right")))); res.Status != Mismatch || len(s.execs) != 0 {
+		t.Fatalf("status %s, execs %v", res.Status, s.execs)
 	}
 }

@@ -7,7 +7,9 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
+	"time"
 	"syscall"
 	"unicode/utf16"
 	"unsafe"
@@ -61,6 +63,14 @@ func displayVersion(root syscall.Handle, path string, wow uint32) (string, bool)
 func Exec(ctx context.Context, name string, args []string) error {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	// On the time limit, end the installer and everything it started (a setup window is a child process)
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		return exec.Command("taskkill", "/T", "/F", "/PID", strconv.Itoa(cmd.Process.Pid)).Run()
+	}
+	cmd.WaitDelay = 5 * time.Second
 	return cmd.Run()
 }
 

@@ -28,6 +28,7 @@ func main() {
 	code := flag.String("code", "", "the set code (normally read from this file's name)")
 	base := flag.String("base", "https://software.fileion.com", "where the list and the count live")
 	noWindow := flag.Bool("no-window", false, "print progress instead of opening the window")
+	appTimeout := flag.Duration("app-timeout", run.DefaultTimeout, "stop an installer that runs longer than this and mark it for manual install")
 	noReport := flag.Bool("no-report", false, "do not send the anonymous count at the end")
 	flag.Parse()
 
@@ -103,9 +104,10 @@ func main() {
 		index[a.ID] = i
 	}
 	r := &run.Runner{Client: client, TempDir: os.TempDir(), Installed: sys.Installed, Exec: sys.Exec,
-		Progress: func(a manifest.App, s run.Status, msg string) {
+		AppTimeout: *appTimeout,
+		Progress: func(a manifest.App, s run.Status, msg string, link string) {
 			logger.Printf("%s: %s: %s", a.Name, s, msg)
-			win.Update(index[a.ID], string(s), ui.Sanitize(msg))
+			win.Update(index[a.ID], string(s), ui.Sanitize(msg), link)
 			if *noWindow {
 				fmt.Printf("%-30s %-12s %s\n", a.Name, s, msg)
 			}

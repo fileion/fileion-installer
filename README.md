@@ -12,6 +12,8 @@ A small program that installs the apps you picked at [software.fileion.com/setup
 4. Shows a plain progress window: one line per app, a link to the log, a Close button, and the SignPath credit.
 5. Sends **one anonymous count** at the end: how many apps worked and how many did not. No name, IP-linked id, app list or computer detail is sent (use `-no-report` to send nothing).
 
+An installer that shows its own setup window or hangs is stopped after a time limit (10 minutes, `-app-timeout`) and marked "Skipped: needs manual install", with a link to the app's Fileion download page. The SHA-256 check always runs first, before anything is started.
+
 Run the same file again later and it updates the same apps.
 
 Windows asks for administrator permission once at the start, so every app installs for everyone on the PC and none asks again. On Linux, some desktops need "Allow executing file as program" ticked in the file's Properties once; Flatpak must be installed.
@@ -42,6 +44,7 @@ Free code signing provided by SignPath.io, certificate by SignPath Foundation.
 | `-code` | Use this set code instead of the one in the file name |
 | `-base` | Server for the list and the count (default `https://software.fileion.com`) |
 | `-no-window` | Print progress in the terminal |
+| `-app-timeout` | Longest one installer may run (default 10m) |
 | `-no-report` | Do not send the anonymous count |
 
 ## Known limits

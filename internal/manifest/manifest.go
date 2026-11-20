@@ -28,6 +28,7 @@ type App struct {
 	ProductCode   string `json:"product_code"`
 	WingetID      string `json:"winget_id"`
 	FlatpakID     string `json:"flatpak_id"`
+	Page          string `json:"page"` // the app's Fileion download page
 }
 
 // Manifest is the answer of /setup/manifest/{code}.

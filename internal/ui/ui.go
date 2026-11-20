@@ -23,6 +23,7 @@ type Row struct {
 	Name    string `json:"name"`
 	Status  string `json:"status"`
 	Message string `json:"message"`
+	Link    string `json:"link,omitempty"`
 }
 
 // State is what the page polls.
@@ -137,11 +138,11 @@ func (s *Server) SetApps(names []string) {
 }
 
 // Update changes one row.
-func (s *Server) Update(i int, status, msg string) {
+func (s *Server) Update(i int, status, msg, link string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if i >= 0 && i < len(s.state.Rows) {
-		s.state.Rows[i].Status, s.state.Rows[i].Message = status, msg
+		s.state.Rows[i].Status, s.state.Rows[i].Message, s.state.Rows[i].Link = status, msg, safeLink(link)
 	}
 }
 
@@ -177,4 +178,12 @@ func Sanitize(s string) string {
 		s = s[:200]
 	}
 	return s
+}
+
+// safeLink passes only an https address on to the page.
+func safeLink(l string) string {
+	if strings.HasPrefix(l, "https://") {
+		return l
+	}
+	return ""
 }

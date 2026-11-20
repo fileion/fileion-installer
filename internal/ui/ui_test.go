@@ -13,7 +13,7 @@ func TestTheWindowAnswersOnlyToItsOwnHostAndPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.SetApps([]string{"VLC"})
-	s.Update(0, "done", "Installed 3.0.21")
+	s.Update(0, "done", "Installed 3.0.21", "")
 	s.Finish(1, 0)
 
 	res, err := http.Get(url + "state")

@@ -31,6 +31,7 @@ const (
 	Mismatch    Status = "mismatch"    // the file's SHA-256 is not the vendor's: not run
 	Unsupported Status = "unsupported" // an installer kind this program cannot run silently
 	Failed      Status = "failed"
+	Manual      Status = "manual" // stopped at the time limit: it shows its own setup window or hung
 	Cancelled   Status = "cancelled"
 )
 
@@ -38,6 +39,7 @@ const (
 type Result struct {
 	Status  Status
 	Message string
+	Link    string // the app's Fileion page, for the statuses that send the person there
 }
 
 // OK says whether the app counts as worked in the anonymous count (installed, updated or already current).
@@ -54,62 +56,77 @@ type Runner struct {
 	Installed func(manifest.App) (version string, found bool)
 	// Exec runs a program and waits for it.
 	Exec func(ctx context.Context, name string, args []string) error
+	// AppTimeout stops an installer that runs longer than this (0 = DefaultTimeout).
+	AppTimeout time.Duration
 	// Progress is told about each step (may be nil).
-	Progress func(app manifest.App, s Status, msg string)
+	Progress func(app manifest.App, s Status, msg string, link string)
 }
 
-func (r *Runner) say(a manifest.App, s Status, msg string) {
+func (r *Runner) say(a manifest.App, s Status, msg string, link string) {
 	if r.Progress != nil {
-		r.Progress(a, s, msg)
+		r.Progress(a, s, msg, link)
 	}
 }
 
 // RunApp installs (or updates) one Windows app from its manifest entry.
 func (r *Runner) RunApp(ctx context.Context, a manifest.App) Result {
 	res := r.runApp(ctx, a)
-	r.say(a, res.Status, res.Message)
+	if res.Status == Unsupported || res.Status == Manual {
+		res.Link = a.Page
+	}
+	r.say(a, res.Status, res.Message, res.Link)
 	return res
 }
 
 func (r *Runner) runApp(ctx context.Context, a manifest.App) Result {
 	if ctx.Err() != nil {
-		return Result{Cancelled, "Stopped before this one"}
+		return Result{Status: Cancelled, Message: "Stopped before this one"}
 	}
 	if a.FlatpakID != "" {
 		return r.runFlatpak(ctx, a)
 	}
 	if v, found := r.Installed(a); found && AtLeast(v, a.MinVersion) {
-		return Result{UpToDate, "Already at " + v}
+		return Result{Status: UpToDate, Message: "Already at " + v}
 	}
 	kind := strings.ToLower(a.InstallerType)
 	if kind == "msix" || kind == "appx" || kind == "msstore" || kind == "zip" || kind == "portable" || strings.TrimSpace(a.SilentSwitch) == "" {
-		return Result{Unsupported, "Needs its own installer: get it from its Fileion page"}
+		return Result{Status: Unsupported, Message: "Needs its own installer: get it from its Fileion page"}
 	}
 
-	r.say(a, Downloading, "Downloading from the vendor")
+	r.say(a, Downloading, "Downloading from the vendor", "")
 	file, sum, err := r.download(ctx, a)
 	if err != nil {
 		if ctx.Err() != nil {
-			return Result{Cancelled, "Stopped"}
+			return Result{Status: Cancelled, Message: "Stopped"}
 		}
-		return Result{Failed, "Download failed: " + err.Error()}
+		return Result{Status: Failed, Message: "Download failed: " + err.Error()}
 	}
 	defer os.Remove(file)
 
-	r.say(a, Verifying, "Checking the SHA-256")
+	r.say(a, Verifying, "Checking the SHA-256", "")
 	if sum != strings.ToLower(a.SHA256) {
-		return Result{Mismatch, "Skipped: the file does not match the vendor's SHA-256, so it was not run"}
+		return Result{Status: Mismatch, Message: "Skipped: the file does not match the vendor's SHA-256, so it was not run"}
 	}
 
-	r.say(a, Installing, "Installing")
+	r.say(a, Installing, "Installing", "")
 	name, args := command(a, file)
-	if err := r.Exec(ctx, name, args); err != nil {
-		if ctx.Err() != nil {
-			return Result{Cancelled, "Stopped"}
-		}
-		return Result{Failed, "The installer reported: " + err.Error()}
+	limit := r.AppTimeout
+	if limit <= 0 {
+		limit = DefaultTimeout
 	}
-	return Result{Done, "Installed " + strings.TrimSpace(a.Version)}
+	runCtx, stop := context.WithTimeout(ctx, limit)
+	defer stop()
+	if err := r.Exec(runCtx, name, args); err != nil {
+		if ctx.Err() != nil {
+			return Result{Status: Cancelled, Message: "Stopped"}
+		}
+		if runCtx.Err() != nil {
+			// Its own setup window, or a hang: stopped, never left running
+			return Result{Status: Manual, Message: "Skipped: needs manual install"}
+		}
+		return Result{Status: Failed, Message: "The installer reported: " + err.Error()}
+	}
+	return Result{Status: Done, Message: "Installed " + strings.TrimSpace(a.Version)}
 }
 
 func (r *Runner) runFlatpak(ctx context.Context, a manifest.App) Result {
@@ -120,14 +137,14 @@ func (r *Runner) runFlatpak(ctx context.Context, a manifest.App) Result {
 		args = []string{"update", "-y", "--noninteractive", a.FlatpakID}
 		msg = "Checked and updated if needed"
 	}
-	r.say(a, Installing, "Installing with Flatpak")
+	r.say(a, Installing, "Installing with Flatpak", "")
 	if err := r.Exec(ctx, "flatpak", args); err != nil {
 		if ctx.Err() != nil {
-			return Result{Cancelled, "Stopped"}
+			return Result{Status: Cancelled, Message: "Stopped"}
 		}
-		return Result{Failed, "Flatpak reported: " + err.Error()}
+		return Result{Status: Failed, Message: "Flatpak reported: " + err.Error()}
 	}
-	return Result{Done, msg}
+	return Result{Status: Done, Message: msg}
 }
 
 // command builds the silent run: msi packages go through msiexec, other kinds run with their switch.
@@ -210,6 +227,9 @@ func numbers(v string) []int {
 	}
 	return out
 }
+
+// DefaultTimeout is how long one installer may run before it is stopped.
+const DefaultTimeout = 10 * time.Minute
 
 // DefaultClient has a connection timeout but none for the body: a large installer on a slow line is not an error.
 func DefaultClient() *http.Client {
