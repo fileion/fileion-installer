@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -58,6 +59,8 @@ type Runner struct {
 	Exec func(ctx context.Context, name string, args []string) error
 	// AppTimeout stops an installer that runs longer than this (0 = DefaultTimeout).
 	AppTimeout time.Duration
+	// Log gets diagnostic lines for the log file (may be nil).
+	Log func(format string, args ...any)
 	// Progress is told about each step (may be nil).
 	Progress func(app manifest.App, s Status, msg string, link string)
 }
@@ -94,7 +97,7 @@ func (r *Runner) runApp(ctx context.Context, a manifest.App) Result {
 	}
 
 	r.say(a, Downloading, "Downloading from the vendor", "")
-	file, sum, err := r.download(ctx, a)
+	file, sum, got, err := r.download(ctx, a)
 	if err != nil {
 		if ctx.Err() != nil {
 			return Result{Status: Cancelled, Message: "Stopped"}
@@ -105,6 +108,9 @@ func (r *Runner) runApp(ctx context.Context, a manifest.App) Result {
 
 	r.say(a, Verifying, "Checking the SHA-256", "")
 	if sum != strings.ToLower(a.SHA256) {
+		if r.Log != nil {
+			r.Log("%s: SHA-256 mismatch: received %d bytes, Content-Type %q, final address %s", a.Name, got.Size, got.ContentType, got.FinalURL)
+		}
 		return Result{Status: Mismatch, Message: "Skipped: the file does not match the vendor's SHA-256, so it was not run"}
 	}
 
@@ -156,42 +162,83 @@ func command(a manifest.App, file string) (string, []string) {
 	return file, switches
 }
 
-// download writes the vendor file to the temp folder and returns its path and SHA-256. Only https; nothing else is fetched.
-func (r *Runner) download(ctx context.Context, a manifest.App) (string, string, error) {
-	if !strings.HasPrefix(a.URL, "https://") {
-		return "", "", fmt.Errorf("the address is not https")
+// Received describes what a download returned, for the log when the SHA-256 does not match.
+type Received struct {
+	Size        int64
+	ContentType string
+	FinalURL    string
+}
+
+// DirectURL rewrites a SourceForge "…/projects/{p}/files/{path}/download" address to the direct
+// "https://downloads.sourceforge.net/project/{p}/{path}" form, which redirects to a mirror instead of showing a web page.
+// Any other address is returned unchanged. The SHA-256 check still decides whether the file is run.
+func DirectURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || (u.Host != "sourceforge.net" && u.Host != "www.sourceforge.net") {
+		return raw
 	}
-	ext := filepath.Ext(strings.SplitN(a.URL, "?", 2)[0])
+	parts := strings.SplitN(strings.TrimPrefix(u.Path, "/"), "/", 4) // projects, {p}, files, {path}
+	if len(parts) < 4 || parts[0] != "projects" || parts[2] != "files" {
+		return raw
+	}
+	path := strings.TrimSuffix(strings.TrimSuffix(parts[3], "/download"), "/")
+	if path == "" {
+		return raw
+	}
+	return "https://downloads.sourceforge.net/project/" + parts[1] + "/" + path
+}
+
+// download writes the vendor file to the temp folder and returns its path and SHA-256. Only https, also across redirects.
+func (r *Runner) download(ctx context.Context, a manifest.App) (string, string, Received, error) {
+	var got Received
+	if !strings.HasPrefix(a.URL, "https://") {
+		return "", "", got, fmt.Errorf("the address is not https")
+	}
+	ext := filepath.Ext(strings.TrimSuffix(strings.SplitN(a.URL, "?", 2)[0], "/download"))
 	if len(ext) > 6 || ext == "" {
 		ext = ".exe"
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.URL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, DirectURL(a.URL), nil)
 	if err != nil {
-		return "", "", err
+		return "", "", got, err
 	}
-	res, err := r.Client.Do(req)
+	// A redirect to anything but https is refused
+	client := *r.Client
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if req.URL.Scheme != "https" {
+			return fmt.Errorf("redirected to a non-https address")
+		}
+		if len(via) >= 10 {
+			return fmt.Errorf("too many redirects")
+		}
+		return nil
+	}
+	res, err := client.Do(req)
 	if err != nil {
-		return "", "", err
+		return "", "", got, err
 	}
 	defer res.Body.Close()
+	got.FinalURL, got.ContentType = res.Request.URL.String(), res.Header.Get("Content-Type")
 	if res.StatusCode != http.StatusOK {
-		return "", "", fmt.Errorf("the vendor answered HTTP %d", res.StatusCode)
+		return "", "", got, fmt.Errorf("the vendor answered HTTP %d", res.StatusCode)
 	}
 	f, err := os.CreateTemp(r.TempDir, "fileion-*"+ext)
 	if err != nil {
-		return "", "", err
+		return "", "", got, err
 	}
 	h := sha256.New()
-	if _, err := io.Copy(io.MultiWriter(f, h), res.Body); err != nil {
+	n, err := io.Copy(io.MultiWriter(f, h), res.Body)
+	got.Size = n
+	if err != nil {
 		f.Close()
 		os.Remove(f.Name())
-		return "", "", err
+		return "", "", got, err
 	}
 	if err := f.Close(); err != nil {
 		os.Remove(f.Name())
-		return "", "", err
+		return "", "", got, err
 	}
-	return f.Name(), hex.EncodeToString(h.Sum(nil)), nil
+	return f.Name(), hex.EncodeToString(h.Sum(nil)), got, nil
 }
 
 // AtLeast says whether the installed version is the manifest's or newer. Versions compare as dotted numbers

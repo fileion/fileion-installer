@@ -120,7 +120,7 @@ func main() {
 		index[a.ID] = i
 	}
 	r := &run.Runner{Client: client, TempDir: os.TempDir(), Installed: sys.Installed, Exec: sys.Exec,
-		AppTimeout: *appTimeout,
+		AppTimeout: *appTimeout, Log: logger.Printf,
 		Progress: func(a manifest.App, s run.Status, msg string, link string) {
 			logger.Printf("%s: %s: %s", a.Name, s, msg)
 			win.Update(index[a.ID], string(s), ui.Sanitize(msg), link)

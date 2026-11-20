@@ -166,9 +166,13 @@ jobs:
             Get-ItemProperty $paths -ErrorAction SilentlyContinue | Where-Object DisplayName | ForEach-Object { "$($_.PSChildName)|$($_.DisplayName)|$($_.DisplayVersion)" }
           }
           $file = Join-Path $env:RUNNER_TEMP 'installer-file.exe'
-          Invoke-WebRequest -Uri $env:APP_URL -OutFile $file -MaximumRetryCount 3 -RetryIntervalSec 5
+          # Same rewrite as run.DirectURL in the installer: a SourceForge /download page becomes the direct mirror link
+          $url = $env:APP_URL
+          if ($url -match '^https://(www\.)?sourceforge\.net/projects/([^/]+)/files/(.+?)(/download)?/?$') { $url = "https://downloads.sourceforge.net/project/$($Matches[2])/$($Matches[3])" }
+          $resp = Invoke-WebRequest -Uri $url -OutFile $file -MaximumRetryCount 3 -RetryIntervalSec 5 -PassThru
           $actual = (Get-FileHash $file -Algorithm SHA256).Hash.ToLower()
           $hashOk = $actual -eq $env:APP_SHA256.ToLower()
+          $received = [ordered]@{ final_url = $resp.BaseResponse.RequestMessage.RequestUri.AbsoluteUri; content_type = $resp.Headers['Content-Type'] -join ','; size = (Get-Item $file).Length }
           $before = @(Entries)
           $timedOut = $false; $exit = $null; $sw = [Diagnostics.Stopwatch]::StartNew()
           if ($hashOk) {
@@ -181,7 +185,7 @@ jobs:
           $sw.Stop()
           $new = @(Entries | Where-Object { $before -notcontains $_ })
           $pass = $hashOk -and (-not $timedOut) -and ($exit -in 0, 3010) -and $new.Count -gt 0
-          $result = [ordered]@{ name = $env:APP_NAME; url = $env:APP_URL; sha256_expected = $env:APP_SHA256; sha256_actual = $actual; sha256_match = $hashOk
+          $result = [ordered]@{ name = $env:APP_NAME; url = $env:APP_URL; sha256_expected = $env:APP_SHA256; sha256_actual = $actual; sha256_match = $hashOk; received = $received
             switch = $env:APP_SWITCH; exit_code = $exit; timed_out = $timedOut; seconds = [int]$sw.Elapsed.TotalSeconds
             shows_in_uninstall_registry = ($new.Count -gt 0); new_uninstall_entries = $new; pass = $pass }
           New-Item -ItemType Directory -Force out | Out-Null

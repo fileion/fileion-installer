@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -208,6 +209,61 @@ func TestTheHashCheckRunsBeforeAnythingIsStartedEvenWithATimeoutSet(t *testing.T
 	r.AppTimeout = 50 * time.Millisecond
 
 	if res := r.RunApp(context.Background(), app(srv, sum([]byte("right")))); res.Status != Mismatch || len(s.execs) != 0 {
+		t.Fatalf("status %s, execs %v", res.Status, s.execs)
+	}
+}
+
+func TestSourceForgeDownloadLinksGoToTheDirectMirrorForm(t *testing.T) {
+	for in, want := range map[string]string{
+		"https://sourceforge.net/projects/wesnoth/files/wesnoth-1.18/wesnoth-1.18.4/wesnoth-1.18.4-win64.exe/download":                      "https://downloads.sourceforge.net/project/wesnoth/wesnoth-1.18/wesnoth-1.18.4/wesnoth-1.18.4-win64.exe",
+		"https://sourceforge.net/projects/codeblocks/files/Binaries/25.03/Windows/32bit/codeblocks-25.03-32bit-setup-nonadmin.exe/download": "https://downloads.sourceforge.net/project/codeblocks/Binaries/25.03/Windows/32bit/codeblocks-25.03-32bit-setup-nonadmin.exe",
+		"https://downloads.sourceforge.net/project/x/y.exe":                                                                                 "https://downloads.sourceforge.net/project/x/y.exe",
+		"https://example.com/projects/p/files/a.exe/download":                                                                               "https://example.com/projects/p/files/a.exe/download",
+		"https://sourceforge.net/projects/p/":                                                                                               "https://sourceforge.net/projects/p/",
+	} {
+		if got := DirectURL(in); got != want {
+			t.Errorf("DirectURL(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestAMismatchLogsWhatWasReceivedAndKeepsNoFile(t *testing.T) {
+	s := &spy{}
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.Write([]byte("<html>interstitial</html>"))
+	}))
+	t.Cleanup(srv.Close)
+	r := newRunner(t, srv, notInstalled, s)
+	var logged []string
+	r.Log = func(f string, a ...any) { logged = append(logged, fmt.Sprintf(f, a...)) }
+
+	res := r.RunApp(context.Background(), app(srv, sum([]byte("the real installer"))))
+
+	if res.Status != Mismatch || len(logged) != 1 {
+		t.Fatalf("status %s, log %v", res.Status, logged)
+	}
+	for _, want := range []string{"25 bytes", "text/html", srv.URL + "/test.exe"} {
+		if !strings.Contains(logged[0], want) {
+			t.Errorf("log %q lacks %q", logged[0], want)
+		}
+	}
+	if left, _ := filepath.Glob(filepath.Join(r.TempDir, "*")); len(left) != 0 {
+		t.Fatalf("a file was kept: %v", left)
+	}
+}
+
+func TestARedirectToPlainHTTPIsRefused(t *testing.T) {
+	s := &spy{}
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://mirror.example/x.exe", http.StatusFound)
+	}))
+	t.Cleanup(srv.Close)
+	r := newRunner(t, srv, notInstalled, s)
+
+	res := r.RunApp(context.Background(), app(srv, sum([]byte("x"))))
+
+	if res.Status != Failed || len(s.execs) != 0 {
 		t.Fatalf("status %s, execs %v", res.Status, s.execs)
 	}
 }
