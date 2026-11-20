@@ -8,10 +8,19 @@ on:
         description: 'Optional JSON list of {name, url, sha256, switch, timeout, type} (timeout in seconds; msi/wix runs through msiexec). Empty = every row of testlist/type-default.tsv'
         required: false
         default: ''
+      release_tag:
+        description: 'Test the PUBLISHED installer of this release (e.g. v0.1.0) instead of building it: its Fileion-Installer.exe is downloaded from GitHub and checked against the release SHA256SUMS and the MZ header. The type-default matrix is skipped.'
+        required: false
+        default: ''
+      set_code:
+        description: 'With release_tag: a real set code (8-12 hex) to run against the LIVE manifest at software.fileion.com. Runs send no count except the one named in the summary.'
+        required: false
+        default: ''
 permissions:
   contents: read
 jobs:
   installer:
+    if: inputs.set_code == '' || inputs.release_tag == ''
     runs-on: windows-latest
     timeout-minutes: 20
     defaults:
@@ -26,9 +35,21 @@ jobs:
       - name: Build the installer, a fake app and the test server
         run: |
           New-Item -ItemType Directory -Force C:\ftest\www\setup\manifest, C:\ftest\out | Out-Null
-          go build -o C:\ftest\Fileion-Test-and-1-more-aaaa1111.exe .
           go build -o C:\ftest\www\fakeapp.exe ./tools/fakeapp
           go build -o C:\ftest\testserver.exe ./tools/testserver
+          if ('${{ inputs.release_tag }}' -eq '') { go build -o C:\ftest\Fileion-Test-and-1-more-aaaa1111.exe . }
+      - name: Use the published release instead of a fresh build
+        if: inputs.release_tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download '${{ inputs.release_tag }}' --repo ${{ github.repository }} --pattern 'Fileion-Installer.exe' --pattern SHA256SUMS --dir C:\ftest\rel
+          $want = ((Get-Content C:\ftest\rel\SHA256SUMS | Where-Object { $_ -match 'Fileion-Installer\.exe' }) -split '\s+')[0]
+          $have = (Get-FileHash C:\ftest\rel\Fileion-Installer.exe -Algorithm SHA256).Hash.ToLower()
+          $mz = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes('C:\ftest\rel\Fileion-Installer.exe')[0..1])
+          "release ${{ inputs.release_tag }}: SHA256SUMS $want, downloaded $have, header $mz" | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          if ($want -ne $have -or $mz -ne 'MZ') { Write-Error 'The downloaded .exe does not match the release SHA256SUMS or is not a Windows program'; exit 1 }
+          Copy-Item C:\ftest\rel\Fileion-Installer.exe C:\ftest\Fileion-Test-and-1-more-aaaa1111.exe
       - name: Trust a throwaway certificate
         run: |
           & "$env:ProgramFiles\Git\usr\bin\openssl.exe" req -x509 -newkey rsa:2048 -nodes -keyout C:\ftest\key.pem -out C:\ftest\cert.pem -days 1 -subj "/CN=localhost" -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" 2>$null
@@ -151,7 +172,101 @@ jobs:
           name: installer-cases
           path: C:\ftest\out\
 
+  live:
+    # the PUBLISHED exe against the LIVE manifest. Only the first run (fresh install) sends the real anonymous count; every other run ticks "Don't send" or uses -no-report.
+    if: inputs.release_tag != '' && inputs.set_code != ''
+    runs-on: windows-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      CODE: ${{ inputs.set_code }}
+    steps:
+      - name: Download the published exe and check it
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory -Force C:\ftest\out | Out-Null
+          gh release download '${{ inputs.release_tag }}' --repo ${{ github.repository }} --pattern 'Fileion-Installer.exe' --pattern SHA256SUMS --dir C:\ftest\rel
+          $want = ((Get-Content C:\ftest\rel\SHA256SUMS | Where-Object { $_ -match 'Fileion-Installer\.exe' }) -split '\s+')[0]
+          $have = (Get-FileHash C:\ftest\rel\Fileion-Installer.exe -Algorithm SHA256).Hash.ToLower()
+          $mz = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes('C:\ftest\rel\Fileion-Installer.exe')[0..1])
+          "release ${{ inputs.release_tag }}: SHA256SUMS $want, downloaded $have, header $mz" | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          if ($want -ne $have -or $mz -ne 'MZ') { Write-Error 'mismatch'; exit 1 }
+          # the code comes from the file name, as it does for a visitor
+          Copy-Item C:\ftest\rel\Fileion-Installer.exe "C:\ftest\Fileion-Live-$env:CODE.exe"
+      - name: Live cases
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $rows = @(); $fail = @()
+          function Check($name, $ok, $detail) { $script:rows += "| $name | $(if ($ok) {'PASS'} else {'FAIL'}) | $detail |"; if (-not $ok) { $script:fail += $name } }
+          function Keys { @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*') | ForEach-Object { Get-ItemProperty $_ -ErrorAction SilentlyContinue } | Where-Object DisplayName | ForEach-Object { $_.DisplayName } | Sort-Object -Unique }
+          $exe = "C:\ftest\Fileion-Live-$env:CODE.exe"
+          $env:FILEION_INSTALLER_ELEVATED = '1'   # the runner is already an administrator
+          $log = "$env:TEMP\fileion-installer.log"
+          $manifest = Invoke-RestMethod "https://software.fileion.com/setup/manifest/$env:CODE"
+          $names = @($manifest.apps | ForEach-Object { $_.name })
+          "Live manifest apps: $($names -join ', ')" | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          Check 'live manifest lists apps' ($names.Count -ge 1) "$($names.Count) apps"
+
+          # 1. fresh install. The one run that sends the real anonymous count.
+          $before = @(Keys)
+          Remove-Item $log -ErrorAction SilentlyContinue
+          $out = & $exe -no-window 2>&1 | Out-String; $c1 = $LASTEXITCODE
+          $out | Set-Content C:\ftest\out\live1-fresh.txt; Copy-Item $log C:\ftest\out\live1-fresh.log -ErrorAction SilentlyContinue
+          $after = @(Keys); $added = @($after | Where-Object { $before -notcontains $_ })
+          $lg = Get-Content $log -Raw -ErrorAction SilentlyContinue
+          $doneN = ([regex]::Matches($out, '\sdone\s')).Count
+          Check 'fresh install' ($c1 -eq 0 -and $doneN -eq $names.Count -and $added.Count -ge 1) "exit $c1, done: $doneN of $($names.Count), new Uninstall entries: $($added -join ' | ')"
+          Check 'fresh install sent the one real count without error' ($lg -notmatch 'count not sent') "log has no 'count not sent'"
+
+          # 2. re-run: skips everything, no count sent
+          Remove-Item $log -ErrorAction SilentlyContinue
+          $out = & $exe -no-window -no-report 2>&1 | Out-String; $c2 = $LASTEXITCODE
+          $out | Set-Content C:\ftest\out\live2-rerun.txt
+          $skipN = ([regex]::Matches($out, 'up-to-date')).Count
+          Check 're-run skips what is installed' ($c2 -eq 0 -and $skipN -ge 1 -and $out -notmatch '\sdone\s') "exit $c2, up-to-date lines: $skipN"
+
+          # 3. "Don't send" ticked: the window's own POST on its local address; the box is ticked as soon as the window address appears in the log, before the run ends (the choice is read at the end)
+          Remove-Item $log -ErrorAction SilentlyContinue
+          $p = Start-Process $exe -ArgumentList '-no-window' -PassThru -WindowStyle Hidden -RedirectStandardOutput C:\ftest\out\live3.txt
+          $url = $null
+          for ($i = 0; $i -lt 100 -and -not $url; $i++) {
+            Start-Sleep -Milliseconds 100
+            $m = Select-String -Path $log -Pattern 'window: (http\S+)' -ErrorAction SilentlyContinue
+            if ($m) { $url = $m.Matches[0].Groups[1].Value }
+          }
+          if ($url) { Invoke-WebRequest -Method Post -Uri "${url}report?send=0" -UseBasicParsing | Out-Null }
+          $null = $p.WaitForExit(120000)
+          $lg = Get-Content $log -Raw -ErrorAction SilentlyContinue
+          Copy-Item $log C:\ftest\out\live3.log -ErrorAction SilentlyContinue
+          Check '"Don''t send" ticked: no count is sent' ($url -and $lg -match "count not sent: Don't send was ticked") "window found: $([bool]$url), log: $(($lg -split "`n" | Select-String 'count not sent') -join ' ')"
+
+          # 4. a standard user: the message, nothing installed
+          $pw = ConvertTo-SecureString 'Fileion-Test-9x!' -AsPlainText -Force
+          New-LocalUser -Name ftestuser -Password $pw -AccountNeverExpires | Out-Null
+          New-Item -ItemType Directory -Force C:\ftest\tmp | Out-Null
+          icacls C:\ftest /grant 'ftestuser:(OI)(CI)F' /T | Out-Null
+          $cred = New-Object Management.Automation.PSCredential('ftestuser', $pw)
+          $env:TEMP = 'C:\ftest\tmp'; $env:TMP = 'C:\ftest\tmp'
+          $before = @(Keys)
+          $p = Start-Process $exe -ArgumentList '-no-window', '-no-report' -Credential $cred -WorkingDirectory C:\ftest -RedirectStandardOutput C:\ftest\out\live4.txt -RedirectStandardError C:\ftest\out\live4.err -PassThru -WindowStyle Hidden -ErrorAction Continue
+          $done = $p -and $p.WaitForExit(90000)
+          if ($p -and -not $done) { taskkill /T /F /PID $p.Id | Out-Null }
+          $o = Get-Content C:\ftest\out\live4.txt -Raw -ErrorAction SilentlyContinue
+          Check 'standard user: says admin rights are needed, nothing installed' ($done -and $o -match 'Administrator rights are needed to install apps, so nothing was installed\.' -and $p.ExitCode -eq 1 -and @(Keys).Count -eq $before.Count) "finished: $done, exit $(if ($p) {$p.ExitCode})"
+          $env:TEMP = $env:RUNNER_TEMP
+
+          "### Live cases (release ${{ inputs.release_tag }}, set $env:CODE)`n| Case | Result | Detail |`n|---|---|---|`n$($rows -join "`n")" | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          if ($fail.Count) { Write-Error "Failed: $($fail -join '; ')"; exit 1 }
+      - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        if: always()
+        with:
+          name: live-cases
+          path: C:\ftest\out\
   plan:
+    if: inputs.release_tag == ''
     runs-on: ubuntu-24.04
     outputs:
       apps: ${{ steps.list.outputs.apps }}
@@ -225,7 +340,7 @@ jobs:
           if-no-files-found: warn
   report:
     needs: type-default
-    if: always()
+    if: always() && inputs.release_tag == ''
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
