@@ -1,6 +1,8 @@
 // Command mkicon draws the Fileion mark (a purple rounded square with a white N: the first three paths of
-// public/assets/images/logo/logo.svg in the Fileion site) and writes winres/icon.ico with 16, 32, 48 and 256 px images.
-// Standard library only, so the icon is reproducible from this file: go run ./tools/mkicon winres/icon.ico
+// public/assets/images/logo/logo.svg in the Fileion site) and writes winres/icon.ico with 16, 24, 32, 48, 64 and 256 px images.
+// With a second argument (a folder) it also writes icon-32.png, icon-64.png, icon-192.png and icon-512.png for the progress window's favicon and
+// web manifest, so the window and the .exe show the same mark.
+// Standard library only, so the icon is reproducible from this file: go run ./tools/mkicon winres/icon.ico internal/ui
 package main
 
 import (
@@ -11,6 +13,8 @@ import (
 	"image/png"
 	"math"
 	"os"
+	"path/filepath"
+	"strconv"
 )
 
 // The mark in the SVG's 54 x 54 box.
@@ -68,11 +72,23 @@ func render(size int) *image.NRGBA {
 }
 
 func main() {
-	if len(os.Args) != 2 {
-		os.Stderr.WriteString("usage: mkicon out.ico\n")
+	if len(os.Args) < 2 || len(os.Args) > 3 {
+		os.Stderr.WriteString("usage: mkicon out.ico [png-folder]\n")
 		os.Exit(2)
 	}
-	sizes := []int{16, 32, 48, 256}
+	if len(os.Args) == 3 {
+		for _, s := range []int{32, 64, 192, 512} {
+			var b bytes.Buffer
+			enc := png.Encoder{CompressionLevel: png.BestCompression}
+			if err := enc.Encode(&b, render(s)); err != nil {
+				panic(err)
+			}
+			if err := os.WriteFile(filepath.Join(os.Args[2], "icon-"+strconv.Itoa(s)+".png"), b.Bytes(), 0o644); err != nil {
+				panic(err)
+			}
+		}
+	}
+	sizes := []int{16, 24, 32, 48, 64, 256}
 	var pngs [][]byte
 	for _, s := range sizes {
 		var b bytes.Buffer

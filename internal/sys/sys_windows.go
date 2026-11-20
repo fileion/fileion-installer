@@ -158,7 +158,7 @@ func RelaunchAsAdmin(args []string) error {
 func OpenWindow(url string) error {
 	for _, edge := range []string{os.Getenv("ProgramFiles(x86)") + `\Microsoft\Edge\Application\msedge.exe`, os.Getenv("ProgramFiles") + `\Microsoft\Edge\Application\msedge.exe`} {
 		if _, err := os.Stat(edge); err == nil {
-			return exec.Command(edge, "--app="+url, "--window-size=560,760").Start()
+			return exec.Command(edge, "--app="+url, "--window-size=520,560").Start()
 		}
 	}
 	return exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
@@ -191,4 +191,9 @@ func HideOwnConsole() {
 	if n == 1 {
 		freeConsole.Call()
 	}
+}
+
+// OpenFile opens a file in the person's own program (Notepad for a log), so the window can show the log file itself, not a localhost address.
+func OpenFile(path string) error {
+	return exec.Command("notepad.exe", path).Start()
 }

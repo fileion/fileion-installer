@@ -27,3 +27,5 @@ func MessageBox(title, text string) bool { return false }
 
 // HideOwnConsole is Windows-only.
 func HideOwnConsole() {}
+
+func OpenFile(path string) error { return exec.Command("open", path).Start() }

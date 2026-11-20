@@ -331,3 +331,56 @@ func TestAnAppFoundByItsNameRuleIsUpdatedThenSkipped(t *testing.T) {
 		t.Fatalf("unparsable version: %s", res.Status)
 	}
 }
+
+func TestAPanicInOneAppIsLoggedAndTheNextAppStillRuns(t *testing.T) {
+	s := &spy{}
+	body := []byte("installer")
+	srv := server(t, body, s)
+	var logged string
+	boom := func(a manifest.App) (string, bool) {
+		if a.Name == "Boom" {
+			panic("registry went wrong")
+		}
+		return "", false
+	}
+	r := newRunner(t, srv, boom, s)
+	r.Log = func(f string, args ...any) { logged += fmt.Sprintf(f, args...) }
+	var told []Status
+	r.Progress = func(a manifest.App, st Status, msg, link string) { told = append(told, st) }
+
+	bad := app(srv, sum(body))
+	bad.Name = "Boom"
+	res := r.RunApp(context.Background(), bad)
+	if res.Status != Failed || !res.Bad() || !strings.Contains(res.Message, "internal error") {
+		t.Fatalf("panic result: %+v", res)
+	}
+	if !strings.Contains(logged, "PANIC registry went wrong") || !strings.Contains(logged, "goroutine") {
+		t.Errorf("the panic and its stack are in the log: %q", logged)
+	}
+	if next := r.RunApp(context.Background(), app(srv, sum(body))); next.Status != Done {
+		t.Errorf("the next app still runs: %s", next.Status)
+	}
+	if len(told) == 0 || told[0] != Failed {
+		t.Errorf("the window is told: %v", told)
+	}
+}
+
+func TestADownloadReportsItsBytesAndTheTotal(t *testing.T) {
+	s := &spy{}
+	body := make([]byte, 300_000)
+	srv := server(t, body, s)
+	r := newRunner(t, srv, notInstalled, s)
+	var lastDone, lastTotal int64
+	calls := 0
+	r.Transfer = func(a manifest.App, done, total int64) { calls++; lastDone, lastTotal = done, total }
+
+	if res := r.RunApp(context.Background(), app(srv, sum(body))); res.Status != Done {
+		t.Fatalf("status %s", res.Status)
+	}
+	if calls == 0 || lastDone != int64(len(body)) {
+		t.Errorf("transfer: %d calls, last %d of %d", calls, lastDone, lastTotal)
+	}
+	if lastTotal < 0 {
+		t.Errorf("an unknown total is 0, not %d", lastTotal)
+	}
+}

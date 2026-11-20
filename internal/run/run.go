@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -63,6 +64,8 @@ type Runner struct {
 	Log func(format string, args ...any)
 	// Progress is told about each step (may be nil).
 	Progress func(app manifest.App, s Status, msg string, link string)
+	// Transfer is told how many bytes of the download have arrived (total is 0 when the vendor does not say), at most a few times a second (may be nil).
+	Transfer func(app manifest.App, done, total int64)
 }
 
 func (r *Runner) say(a manifest.App, s Status, msg string, link string) {
@@ -71,9 +74,19 @@ func (r *Runner) say(a manifest.App, s Status, msg string, link string) {
 	}
 }
 
-// RunApp installs (or updates) one Windows app from its manifest entry.
-func (r *Runner) RunApp(ctx context.Context, a manifest.App) Result {
-	res := r.runApp(ctx, a)
+// RunApp installs (or updates) one Windows app from its manifest entry. A panic anywhere in the work for one app is logged with its stack and
+// becomes that app's failure: it never takes the whole run (and the window) down.
+func (r *Runner) RunApp(ctx context.Context, a manifest.App) (res Result) {
+	defer func() {
+		if p := recover(); p != nil {
+			if r.Log != nil {
+				r.Log("%s: PANIC %v\n%s", a.Name, p, debug.Stack())
+			}
+			res = Result{Status: Failed, Message: "The installer hit an internal error on this app (see the log)"}
+			r.say(a, res.Status, res.Message, res.Link)
+		}
+	}()
+	res = r.runApp(ctx, a)
 	if res.Status == Unsupported || res.Status == Manual {
 		res.Link = a.Page
 	}
@@ -232,7 +245,14 @@ func (r *Runner) download(ctx context.Context, a manifest.App) (string, string, 
 		return "", "", got, err
 	}
 	h := sha256.New()
-	n, err := io.Copy(io.MultiWriter(f, h), res.Body)
+	total := max(res.ContentLength, 0) // -1 = the vendor does not say
+	tell := func(done, total int64) {
+		if r.Transfer != nil {
+			r.Transfer(a, done, total)
+		}
+	}
+	n, err := io.Copy(io.MultiWriter(f, h, &progress{total: total, tell: tell}), res.Body)
+	tell(n, total) // the last figure, whatever the pace of the updates
 	got.Size = n
 	if err != nil {
 		f.Close()
@@ -244,6 +264,22 @@ func (r *Runner) download(ctx context.Context, a manifest.App) (string, string, 
 		return "", "", got, err
 	}
 	return f.Name(), hex.EncodeToString(h.Sum(nil)), got, nil
+}
+
+// progress counts the bytes of a download and reports them at most four times a second, and once more at the end.
+type progress struct {
+	done, total int64
+	last        time.Time
+	tell        func(done, total int64)
+}
+
+func (p *progress) Write(b []byte) (int, error) {
+	p.done += int64(len(b))
+	if now := time.Now(); now.Sub(p.last) >= 250*time.Millisecond || (p.total > 0 && p.done >= p.total) {
+		p.last = now
+		p.tell(p.done, p.total)
+	}
+	return len(b), nil
 }
 
 // AtLeast says whether the installed version is the manifest's or newer (see version.AtLeast).

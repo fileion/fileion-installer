@@ -13,6 +13,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
+	"sync/atomic"
 	"time"
 
 	"fileion-installer/internal/manifest"
@@ -81,6 +83,11 @@ func main() {
 		os.Exit(1)
 	}
 	logger.Printf("window: %s", url)
+	win.OpenLog = func() {
+		if err := sys.OpenFile(logPath); err != nil {
+			logger.Printf("could not open the log: %v", err)
+		}
+	}
 	windowShown := *noWindow
 	if !*noWindow {
 		if err := sys.OpenWindow(url); err != nil {
@@ -100,6 +107,16 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() { <-win.Closed; cancel() }()
+	// A crash in the run is logged with its stack and told in the window; it never takes the window down with it
+	defer func() {
+		if p := recover(); p != nil {
+			logger.Printf("PANIC in the run: %v\n%s", p, debug.Stack())
+			win.Note("The installer hit an internal error and stopped. The log is at " + logPath)
+			win.Finish(0, 0)
+			waitForClose(win, *noWindow)
+			os.Exit(1)
+		}
+	}()
 
 	if needAdmin {
 		msg := "Administrator rights are needed to install apps, so nothing was installed. Run this file again and choose Yes at the permission prompt."
@@ -138,9 +155,20 @@ func main() {
 	for i, a := range m.Apps {
 		index[a.ID] = i
 	}
+	// What is going on, for the heartbeat line in the log: if the program ever dies, the last such line says what it was doing
+	var cur atomic.Value
+	cur.Store("starting")
+	started := time.Now()
+	go func() {
+		for range time.Tick(30 * time.Second) {
+			logger.Printf("alive: %v, %ds into the run", cur.Load(), int(time.Since(started).Seconds()))
+		}
+	}()
 	r := &run.Runner{Client: client, TempDir: os.TempDir(), Installed: sys.Installed, Exec: sys.Exec,
 		AppTimeout: *appTimeout, Log: logger.Printf,
+		Transfer: func(a manifest.App, done, total int64) { win.Transfer(index[a.ID], done, total) },
 		Progress: func(a manifest.App, s run.Status, msg string, link string) {
+			cur.Store(a.Name + ": " + string(s))
 			logger.Printf("%s: %s: %s", a.Name, s, msg)
 			win.Update(index[a.ID], string(s), ui.Sanitize(msg), link)
 			if *noWindow {
