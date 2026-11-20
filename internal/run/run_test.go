@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -382,5 +384,119 @@ func TestADownloadReportsItsBytesAndTheTotal(t *testing.T) {
 	}
 	if lastTotal < 0 {
 		t.Errorf("an unknown total is 0, not %d", lastTotal)
+	}
+}
+
+// An installer that never returns although the app is installed (a hidden prompt, a child left alive): the app is detected in the registry
+// while it runs, counted as installed, and the installer is left running, not killed.
+func TestAnInstallerThatNeverReturnsIsDetectedWhileItRunsAndLeftAlone(t *testing.T) {
+	s := &spy{}
+	body := []byte("setup that never ends")
+	srv := server(t, body, s)
+	var polls int32
+	installed := func(manifest.App) (string, bool) {
+		if atomic.AddInt32(&polls, 1) < 3 {
+			return "", false // not there yet
+		}
+		return "2.0.0", true // registered after a few polls
+	}
+	r := newRunner(t, srv, installed, s)
+	r.PollEvery, r.Grace = 10*time.Millisecond, 50*time.Millisecond
+	var killed int32
+	r.Exec = func(ctx context.Context, name string, args []string) error {
+		<-ctx.Done() // never returns on its own
+		atomic.StoreInt32(&killed, 1)
+		return ctx.Err()
+	}
+	var logged string
+	var mu sync.Mutex
+	r.Log = func(f string, a ...any) { mu.Lock(); logged += fmt.Sprintf(f, a...) + "\n"; mu.Unlock() }
+
+	start := time.Now()
+	res := r.RunApp(context.Background(), app(srv, sum(body)))
+	if res.Status != Done || !res.OK() || !strings.Contains(res.Message, "installer is still open") {
+		t.Fatalf("result %+v", res)
+	}
+	if time.Since(start) > 5*time.Second {
+		t.Errorf("took %v: it waited for the time limit", time.Since(start))
+	}
+	time.Sleep(50 * time.Millisecond)
+	if atomic.LoadInt32(&killed) != 0 {
+		t.Error("the vendor installer was ended in the middle of its clean-up; it must be left running")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !strings.Contains(logged, "detected as installed at 2.0.0") || !strings.Contains(logged, "left running") {
+		t.Errorf("the log says what happened: %q", logged)
+	}
+}
+
+func TestAnInstallerThatEndsDuringTheGraceIsSimplyDoneWithItsExitCodeLogged(t *testing.T) {
+	s := &spy{}
+	body := []byte("setup")
+	srv := server(t, body, s)
+	r := newRunner(t, srv, func(manifest.App) (string, bool) { return "2.0.0", true }, s)
+	r.PollEvery, r.Grace = 5*time.Millisecond, time.Second
+	r.Exec = func(ctx context.Context, name string, args []string) error {
+		time.Sleep(60 * time.Millisecond)
+		return nil
+	}
+	var logged string
+	r.Log = func(f string, a ...any) { logged += fmt.Sprintf(f, a...) + "\n" }
+	// the "already installed" check at the start would skip it, so the first look says no and the polls say yes
+	var first int32
+	r.Installed = func(manifest.App) (string, bool) {
+		if atomic.AddInt32(&first, 1) == 1 {
+			return "", false
+		}
+		return "2.0.0", true
+	}
+	res := r.RunApp(context.Background(), app(srv, sum(body)))
+	if res.Status != Done || strings.Contains(res.Message, "still open") {
+		t.Fatalf("result %+v", res)
+	}
+	if !strings.Contains(logged, "exited after") || !strings.Contains(logged, "code 0") {
+		t.Errorf("exit code and time are logged: %q", logged)
+	}
+}
+
+func TestAnInstallerNotDetectedAfterAMinuteSaysItMayBeWaitingAndIsStoppedAtTheLimit(t *testing.T) {
+	s := &spy{hang: true}
+	body := []byte("setup with a hidden prompt")
+	srv := server(t, body, s)
+	r := newRunner(t, srv, notInstalled, s)
+	r.PollEvery, r.WaitHint, r.AppTimeout = 5*time.Millisecond, 30*time.Millisecond, 150*time.Millisecond
+	var said []string
+	var mu sync.Mutex
+	r.Progress = func(a manifest.App, st Status, msg, link string) { mu.Lock(); said = append(said, msg); mu.Unlock() }
+	res := r.RunApp(context.Background(), app(srv, sum(body)))
+	if res.Status != Manual {
+		t.Fatalf("status %s", res.Status)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	waiting := false
+	for _, m := range said {
+		waiting = waiting || strings.Contains(m, "may be waiting for you")
+	}
+	if !waiting {
+		t.Errorf("the window was never told the installer may be waiting: %v", said)
+	}
+}
+
+func TestAnInstallerThatExitsNonZeroButLeftTheAppInstalledIsDone(t *testing.T) {
+	s := &spy{}
+	body := []byte("setup that wants a restart")
+	srv := server(t, body, s)
+	var n int32
+	r := newRunner(t, srv, func(manifest.App) (string, bool) {
+		if atomic.AddInt32(&n, 1) == 1 {
+			return "", false
+		}
+		return "2.0.0", true
+	}, s)
+	r.Exec = func(ctx context.Context, name string, args []string) error { return fmt.Errorf("exit status 3010") }
+	if res := r.RunApp(context.Background(), app(srv, sum(body))); res.Status != Done {
+		t.Fatalf("a non-zero exit with the app installed: %+v", res)
 	}
 }

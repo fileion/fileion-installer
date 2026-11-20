@@ -101,10 +101,12 @@ func displayVersion(root syscall.Handle, path string, wow uint32) (string, bool)
 	return regString(key, "DisplayVersion"), true // installed; a version that cannot be read is "" and means update, not skip
 }
 
-// Exec runs a program without a console window and waits for it.
+// Exec runs a program and waits for it. No console window is made for it (CREATE_NO_WINDOW) but its own windows are NOT hidden: a silent
+// installer shows none, and one that stops to ask something ("close the running app", a finish page) must be visible, not waiting on a
+// dialog nobody can see.
 func Exec(ctx context.Context, name string, args []string) error {
 	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000}
 	// On the time limit, end the installer and everything it started (a setup window is a child process)
 	cmd.Cancel = func() error {
 		if cmd.Process == nil {

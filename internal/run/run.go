@@ -6,11 +6,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime/debug"
 	"strings"
@@ -60,6 +62,9 @@ type Runner struct {
 	Exec func(ctx context.Context, name string, args []string) error
 	// AppTimeout stops an installer that runs longer than this (0 = DefaultTimeout).
 	AppTimeout time.Duration
+	// PollEvery is how often the registry is looked at while an installer runs (0 = 4 s); WaitHint is when the window says the installer
+	// may be waiting for the person (0 = 60 s); Grace is how long an installer that is already detected gets to end by itself (0 = 30 s).
+	PollEvery, WaitHint, Grace time.Duration
 	// Log gets diagnostic lines for the log file (may be nil).
 	Log func(format string, args ...any)
 	// Progress is told about each step (may be nil).
@@ -129,23 +134,117 @@ func (r *Runner) runApp(ctx context.Context, a manifest.App) Result {
 
 	r.say(a, Installing, "Installing", "")
 	name, args := command(a, file)
-	limit := r.AppTimeout
+	return r.install(ctx, a, name, args)
+}
+
+// install runs the vendor installer and watches it. Some installers never return on their own (a finish page, a "close the running app"
+// prompt, a child process left alive) although the app is already installed, so while it runs the Uninstall registry is polled (by key or
+// by the name rule): when the app appears at the expected version it counts as installed and the run moves on. The installer is then
+// given a grace period to end by itself and, if it is still open, is LEFT RUNNING, not killed: ending a vendor installer in the middle of
+// its clean-up (shortcuts, services, file associations) can leave the app half set up, and the app is already registered and works. Its
+// window is not hidden (see sys.Exec), so a prompt is visible, and after a minute without detection the window says it may be waiting.
+func (r *Runner) install(ctx context.Context, a manifest.App, name string, args []string) Result {
+	limit, poll, hint, grace := r.AppTimeout, r.PollEvery, r.WaitHint, r.Grace
 	if limit <= 0 {
 		limit = DefaultTimeout
 	}
-	runCtx, stop := context.WithTimeout(ctx, limit)
-	defer stop()
-	if err := r.Exec(runCtx, name, args); err != nil {
+	if poll <= 0 {
+		poll = 4 * time.Second
+	}
+	if hint <= 0 {
+		hint = 60 * time.Second
+	}
+	if grace <= 0 {
+		grace = 30 * time.Second
+	}
+	// The installer's own lifetime is the run's, not this function's: it is only ended on the time limit or when the run is stopped
+	execCtx, endIt := context.WithCancel(ctx)
+	leave := false // true when the installer is deliberately left running
+	defer func() {
+		if !leave {
+			endIt()
+		}
+	}()
+	done := make(chan error, 1)
+	start := time.Now()
+	go func() { done <- r.Exec(execCtx, name, args) }()
+	logf := func(format string, args ...any) {
+		if r.Log != nil {
+			r.Log("%s: "+format, append([]any{a.Name}, args...)...)
+		}
+	}
+	elapsed := func() string { return time.Since(start).Round(time.Second).String() }
+	finish := func(err error) Result { // the installer ended by itself
+		code := exitCode(err)
+		logf("installer exited after %s with code %d (%v)", elapsed(), code, err)
 		if ctx.Err() != nil {
 			return Result{Status: Cancelled, Message: "Stopped"}
 		}
-		if runCtx.Err() != nil {
-			// Its own setup window, or a hang: stopped, never left running
-			return Result{Status: Manual, Message: "Skipped: needs manual install"}
+		if err != nil {
+			return Result{Status: Failed, Message: "The installer reported: " + err.Error()}
 		}
-		return Result{Status: Failed, Message: "The installer reported: " + err.Error()}
+		return Result{Status: Done, Message: "Installed " + strings.TrimSpace(a.Version)}
 	}
-	return Result{Status: Done, Message: "Installed " + strings.TrimSpace(a.Version)}
+	present := func() (string, bool) {
+		v, found := r.Installed(a)
+		return v, found && AtLeast(v, a.MinVersion)
+	}
+
+	tick, hintT, deadline := time.NewTicker(poll), time.NewTimer(hint), time.NewTimer(limit)
+	defer tick.Stop()
+	defer hintT.Stop()
+	defer deadline.Stop()
+	for {
+		select {
+		case err := <-done:
+			if err != nil && ctx.Err() == nil {
+				if v, ok := present(); ok { // some installers return a non-zero code (a restart is needed) and the app is there
+					logf("installer exited after %s with code %d (%v), but the app is installed at %s", elapsed(), exitCode(err), err, v)
+					return Result{Status: Done, Message: "Installed " + strings.TrimSpace(a.Version)}
+				}
+			}
+			return finish(err)
+		case <-tick.C:
+			v, ok := present()
+			if !ok {
+				continue
+			}
+			logf("detected as installed at %s after %s while its installer is still running; waiting up to %s for it to end", v, elapsed(), grace)
+			select {
+			case err := <-done:
+				return finish(err)
+			case <-time.After(grace):
+				leave = true
+				logf("its installer is still open after %s and is left running (not killed): the app is installed", elapsed())
+				return Result{Status: Done, Message: "Installed " + strings.TrimSpace(a.Version) + " (its installer is still open: you can close it)"}
+			case <-ctx.Done():
+				endIt()
+				return Result{Status: Cancelled, Message: "Stopped"}
+			}
+		case <-hintT.C:
+			logf("still running after %s and not detected yet: it may be waiting for the person", elapsed())
+			r.say(a, Installing, a.Name+"'s installer may be waiting for you: look for its window or in the taskbar", "")
+		case <-deadline.C:
+			logf("time limit of %s reached; ending the installer", limit)
+			endIt()
+			return Result{Status: Manual, Message: "Skipped: needs manual install"}
+		case <-ctx.Done():
+			endIt()
+			return Result{Status: Cancelled, Message: "Stopped"}
+		}
+	}
+}
+
+// exitCode is the installer's exit code from the error Exec returned (0 for none, -1 when it did not run to an exit).
+func exitCode(err error) int {
+	if err == nil {
+		return 0
+	}
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		return ee.ExitCode()
+	}
+	return -1
 }
 
 func (r *Runner) runFlatpak(ctx context.Context, a manifest.App) Result {

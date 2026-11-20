@@ -228,6 +228,70 @@ jobs:
           name: installer-cases
           path: C:\ftest\out\
 
+  wait-detect:
+    # the friend-PC bug: Notepad++ and VLC stayed on "Installing" although they were installed. A fresh build runs the real vendor installers
+    # (x64, also on the Windows 11 ARM runner, where the x64 exe runs under emulation) and must finish with the app detected, in a sane time.
+    if: inputs.release_tag == '' && inputs.set_code == ''
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, windows-11-arm]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@3041bf56c941b39c61721a86cd11f3bb1338122a # v5.2.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Build the x64 installer (the shipped one) and the test server, trust a certificate, write the manifest
+        run: |
+          New-Item -ItemType Directory -Force C:\ftest\www\setup\manifest, C:\ftest\out | Out-Null
+          $env:GOOS = 'windows'; $env:GOARCH = 'amd64'
+          go build -o C:\ftest\Fileion-Wait-and-1-more-bbbb8888.exe .
+          go build -o C:\ftest\testserver.exe ./tools/testserver
+          & "$env:ProgramFiles\Git\usr\bin\openssl.exe" req -x509 -newkey rsa:2048 -nodes -keyout C:\ftest\key.pem -out C:\ftest\cert.pem -days 1 -subj "/CN=localhost" -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" 2>$null
+          certutil -addstore -f Root C:\ftest\cert.pem | Out-Null
+          function App($id, $name, $ver, $code, $url, $hash) {
+            @{ id = $id; name = $name; version = $ver; min_version = $ver; url = $url; sha256 = $hash; installer_type = 'nullsoft'; architecture = 'x64'; silent_switch = '/S'; product_code = $code; winget_id = "Test.W$id"; page = "https://software.fileion.com/test-w$id" }
+          }
+          $apps = @(
+            (App 1 'Notepad++' '8.9.9.1' 'Notepad++' 'https://github.com/notepad-plus-plus/notepad-plus-plus/releases/download/v8.9.9.1/npp.8.9.9.1.Installer.x64.exe' 'ce3267f5c4e7e42f847e00f4b20234da6150647203033cdde34a69593efc3152'),
+            (App 2 'VLC media player' '3.0.24' 'VLC media player' 'https://download.videolan.org/pub/videolan/vlc/3.0.24/win64/vlc-3.0.24-win64.exe' 'd711e1e1fe52052748c39080c7dce63f6b7e4c315efedf1774a3f1957b782ff3'))
+          @{ code = 'bbbb8888'; os = 'windows'; apps = $apps } | ConvertTo-Json -Depth 5 | Set-Content C:\ftest\www\setup\manifest\bbbb8888 -Encoding utf8
+      - name: Install both through the installer and check it comes back
+        run: |
+          Start-Process C:\ftest\testserver.exe -ArgumentList '-addr','127.0.0.1:8443','-dir','C:\ftest\www','-cert','C:\ftest\cert.pem','-key','C:\ftest\key.pem' -RedirectStandardError C:\ftest\out\server.log -WindowStyle Hidden
+          Start-Sleep 3
+          $ErrorActionPreference = 'Continue'
+          $env:FILEION_INSTALLER_ELEVATED = '1'
+          $rows = @(); $fail = @()
+          function Check($name, $ok, $detail) { $script:rows += "| $name | $(if ($ok) {'PASS'} else {'FAIL'}) | $detail |"; if (-not $ok) { $script:fail += $name } }
+          $log = "$env:TEMP\fileion-installer.log"; Remove-Item $log -ErrorAction SilentlyContinue
+          $arch = (Get-CimInstance Win32_Processor).Architecture  # 9 = x64, 12 = ARM64
+          $sw = [Diagnostics.Stopwatch]::StartNew()
+          $out = & C:\ftest\Fileion-Wait-and-1-more-bbbb8888.exe -base https://127.0.0.1:8443 -no-window -no-report -app-timeout 15m 2>&1 | Out-String; $c1 = $LASTEXITCODE
+          $sw.Stop()
+          $out | Set-Content C:\ftest\out\wait1.txt; Copy-Item $log C:\ftest\out\wait1.log -ErrorAction SilentlyContinue
+          $lg = Get-Content $log -Raw -ErrorAction SilentlyContinue
+          $doneN = ([regex]::Matches($out, '\sdone\s')).Count
+          Check "both installed, run returned (processor $arch)" ($c1 -eq 0 -and $doneN -eq 2) "exit $c1, done: $doneN of 2, $([int]$sw.Elapsed.TotalSeconds) s"
+          Check 'the run did not wait for the time limit' ($sw.Elapsed.TotalMinutes -lt 10) "$([int]$sw.Elapsed.TotalSeconds) s of 900"
+          Check 'the log has each installer's exit code or its detection' ($lg -match 'Notepad\+\+: installer exited after' -or $lg -match 'Notepad\+\+: detected as installed') (($lg -split "`n" | Select-String 'Notepad\+\+|VLC' | Select-Object -Last 6) -join ' // ')
+          $out = & C:\ftest\Fileion-Wait-and-1-more-bbbb8888.exe -base https://127.0.0.1:8443 -no-window -no-report 2>&1 | Out-String
+          Check 'second run skips both' (([regex]::Matches($out, 'up-to-date')).Count -eq 2) 're-run'
+          "### Wait-detect cases ($env:RUNNER_ARCH / ${{ matrix.os }})`n| Case | Result | Detail |`n|---|---|---|`n$($rows -join "`n")" | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          Get-Process | Sort-Object CPU -Descending | Select-Object -First 15 Name, Id, CPU | Format-Table | Out-String | Set-Content C:\ftest\out\processes-after.txt
+          if ($fail.Count) { Write-Error "Failed: $($fail -join '; ')"; exit 1 }
+      - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        if: always()
+        with:
+          name: wait-detect-${{ matrix.os }}
+          path: C:\ftest\out\
+
   vendor:
     # the PUBLISHED exe, the workflow's own test manifest server, three real vendor installers: no production traffic at all
     if: inputs.release_tag != '' && inputs.set_code == ''
