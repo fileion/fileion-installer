@@ -36,6 +36,7 @@ jobs:
           ./build.sh "$V" && diff first.sums dist/SHA256SUMS && echo "identical on the second build"
       - name: Pack the AppImage (appimagetool is pinned by SHA-256)
         run: |
+          sudo apt-get install -y --no-install-recommends desktop-file-utils > /dev/null
           mkdir -p AppDir/usr/bin
           cp dist/Fileion-Installer AppDir/usr/bin/fileion-installer
           cp packaging/AppRun AppDir/AppRun && chmod +x AppDir/AppRun
