@@ -12,11 +12,11 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
 	"fileion-installer/internal/manifest"
+	"fileion-installer/internal/version"
 )
 
 // Status is what the window shows for one app.
@@ -246,39 +246,8 @@ func (r *Runner) download(ctx context.Context, a manifest.App) (string, string, 
 	return f.Name(), hex.EncodeToString(h.Sum(nil)), got, nil
 }
 
-// AtLeast says whether the installed version is the manifest's or newer. Versions compare as dotted numbers
-// ("3.0.20" < "3.0.21", "10.0" > "9.9"); a missing minimum means any installed copy counts, as does an unreadable one.
-func AtLeast(installed, min string) bool {
-	if strings.TrimSpace(min) == "" {
-		return true
-	}
-	a, b := numbers(installed), numbers(min)
-	for i := 0; i < len(a) || i < len(b); i++ {
-		var x, y int
-		if i < len(a) {
-			x = a[i]
-		}
-		if i < len(b) {
-			y = b[i]
-		}
-		if x != y {
-			return x > y
-		}
-	}
-	return true
-}
-
-func numbers(v string) []int {
-	var out []int
-	for _, part := range strings.FieldsFunc(strings.TrimLeft(strings.TrimSpace(v), "vV"), func(r rune) bool { return r == '.' || r == '-' || r == '+' || r == '_' }) {
-		n, err := strconv.Atoi(strings.TrimRight(part, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"))
-		if err != nil {
-			break
-		}
-		out = append(out, n)
-	}
-	return out
-}
+// AtLeast says whether the installed version is the manifest's or newer (see version.AtLeast).
+func AtLeast(installed, min string) bool { return version.AtLeast(installed, min) }
 
 // DefaultTimeout is how long one installer may run before it is stopped.
 const DefaultTimeout = 10 * time.Minute

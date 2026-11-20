@@ -69,6 +69,12 @@ jobs:
           Write-Manifest 'bbbb2222' (App 2 'Test Wrong Hash' '{FILEION-TEST-2}' '/S /CODE={FILEION-TEST-2}' ('0' * 64))
           Write-Manifest 'cccc3333' (App 3 'Test Hang' '{FILEION-TEST-3}' '/HANG' $sha)
           Write-Manifest 'dddd4444' (App 4 'Test No Admin' '{FILEION-TEST-4}' '/S /CODE={FILEION-TEST-4}' $sha)
+          # apps found by a name rule (DisplayName prefix + Publisher), no product code: the one in HKLM is older, the one in HKCU is newer
+          function MatchApp($id, $name, $ver, $rule, $switch) {
+            $a = App $id $name $null $switch $sha; $a.version = $ver; $a.min_version = $ver; $a.match = $rule; $a
+          }
+          Write-Manifest 'eeee6666' (MatchApp 6 'Test Match Update' '2.0' @{ name = 'Fileion Matchtest '; publisher = 'Fileion Test' } '/S /CODE={FILEION-MATCH-NEW} /NAME=Fileion_Matchtest_2.0 /PUBLISHER=Fileion_Test /VERSION=2.0')
+          Write-Manifest 'ffff7777' (MatchApp 7 'Test Match HKCU' '4.0' @{ name = 'Fileion Hkcutest'; publisher = 'Fileion Test HKCU' } '/S /CODE={FILEION-MATCH-HKCU}')
       - name: Run the cases
         run: |
           # started in this step: a process left running by an earlier step is cleaned up when that step ends
@@ -185,6 +191,31 @@ jobs:
             Check 'a file with no code says so (exit 2)' ($code8 -eq 2 -and $out -match 'no app list') "exit $code8"
             $strip = 'C:\ftest\pen\stripped.exe'; & C:\ftest\stamp.exe -strip $stamped $strip
             Check 'stripping the stamp gives the original bytes' ((Get-FileHash $strip).Hash -eq (Get-FileHash C:\ftest\Fileion-Test-and-1-more-aaaa1111.exe).Hash) 'SHA-256 of the stripped copy'
+            Remove-Item Env:FILEION_INSTALLER_ELEVATED -ErrorAction SilentlyContinue
+          }
+
+          # 9-10. an app found by name + publisher instead of a key: older -> updated, then skipped; HKCU only -> skipped; Opera-like lookalike untouched
+          if ('${{ inputs.release_tag }}' -eq '') {
+            $env:FILEION_INSTALLER_ELEVATED = '1'
+            $un = 'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall'
+            reg add "HKLM\$un\{FILEION-MATCH-OLD}" /v DisplayName /d 'Fileion Matchtest 1.0' /f | Out-Null
+            reg add "HKLM\$un\{FILEION-MATCH-OLD}" /v Publisher /d 'Fileion Test' /f | Out-Null
+            reg add "HKLM\$un\{FILEION-MATCH-OLD}" /v DisplayVersion /d '1.0' /f | Out-Null
+            reg add "HKLM\$un\{FILEION-MATCH-LOOKALIKE}" /v DisplayName /d 'Fileion Matchtest GX 9.0' /f | Out-Null
+            reg add "HKLM\$un\{FILEION-MATCH-LOOKALIKE}" /v Publisher /d 'Someone Else' /f | Out-Null
+            reg add "HKLM\$un\{FILEION-MATCH-LOOKALIKE}" /v DisplayVersion /d '9.0' /f | Out-Null
+            $out = & $installer @common '-code' 'eeee6666' 2>&1 | Out-String; $c9a = $LASTEXITCODE
+            $out | Set-Content C:\ftest\out\case9a-match-update.txt
+            Check 'name rule: an older install is updated' ($c9a -eq 0 -and $out -match 'done' -and (Key '{FILEION-MATCH-NEW}')) "exit $c9a, new entry present: $(Key '{FILEION-MATCH-NEW}')"
+            $out = & $installer @common '-code' 'eeee6666' 2>&1 | Out-String; $c9b = $LASTEXITCODE
+            $out | Set-Content C:\ftest\out\case9b-match-skip.txt
+            Check 'name rule: the next run skips it (a lookalike from another publisher is not counted)' ($c9b -eq 0 -and $out -match 'up-to-date') "exit $c9b"
+            reg add "HKCU\$un\{FILEION-MATCH-HKCU}" /v DisplayName /d 'Fileion Hkcutest 5.0' /f | Out-Null
+            reg add "HKCU\$un\{FILEION-MATCH-HKCU}" /v Publisher /d 'Fileion Test HKCU' /f | Out-Null
+            reg add "HKCU\$un\{FILEION-MATCH-HKCU}" /v DisplayVersion /d '5.0' /f | Out-Null
+            $out = & $installer @common '-code' 'ffff7777' 2>&1 | Out-String; $c10 = $LASTEXITCODE
+            $out | Set-Content C:\ftest\out\case10-match-hkcu.txt
+            Check 'name rule: an entry only in HKCU is found' ($c10 -eq 0 -and $out -match 'up-to-date') "exit $c10"
             Remove-Item Env:FILEION_INSTALLER_ELEVATED -ErrorAction SilentlyContinue
           }
 
@@ -428,10 +459,10 @@ jobs:
     steps:
       - name: Download, check the SHA-256, install silently, look in the Uninstall registry
         run: |
-          # "hive|key name|DisplayName|DisplayVersion" for every Uninstall entry: HKLM 64-bit, HKLM 32-bit (WOW6432Node), HKCU
+          # "hive|key name|DisplayName|DisplayVersion|Publisher" for every Uninstall entry: HKLM 64-bit, HKLM 32-bit (WOW6432Node), HKCU
           function Entries {
             foreach ($h in @(@('HKLM64', 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall'), @('HKLM32', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'), @('HKCU', 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall'))) {
-              Get-ItemProperty "$($h[1])\*" -ErrorAction SilentlyContinue | Where-Object DisplayName | ForEach-Object { "$($h[0])|$($_.PSChildName)|$($_.DisplayName)|$($_.DisplayVersion)" }
+              Get-ItemProperty "$($h[1])\*" -ErrorAction SilentlyContinue | Where-Object DisplayName | ForEach-Object { "$($h[0])|$($_.PSChildName)|$($_.DisplayName)|$($_.DisplayVersion)|$($_.Publisher)" }
             }
           }
           # Skip on the runner: the GitHub Windows image already has Git for Windows installed (and a Git process can be running), so its installer exits 1 there.
@@ -489,7 +520,7 @@ jobs:
       - run: |
           jq -s '.' results/*/result.json > all-results.json
           # one line per new Uninstall entry: app, hive, key name, DisplayName, DisplayVersion
-          { printf 'app\thive\tkey\tdisplay_name\tdisplay_version\n'; jq -r '.[] | .name as $n | .new_uninstall_entries[]? | [$n] + split("|") | @tsv' all-results.json; } > uninstall-keys.tsv
+          { printf 'app\thive\tkey\tdisplay_name\tdisplay_version\tpublisher\n'; jq -r '.[] | .name as $n | .new_uninstall_entries[]? | [$n] + split("|") | @tsv' all-results.json; } > uninstall-keys.tsv
           # entries that were already on the runner (a skipped app), listed read-only
           jq -r '.[] | select(.existing_uninstall_entries) | .name as $n | .existing_uninstall_entries[] | [$n + " (already on runner)"] + split("|") | @tsv' all-results.json >> uninstall-keys.tsv
           cat uninstall-keys.tsv >> "$GITHUB_STEP_SUMMARY"

@@ -22,13 +22,13 @@ a{color:var(--mid)}.priv{margin:0 0 6px}.priv label{white-space:nowrap;margin:0 
 <main>
 <h1>Fileion Installer</h1>
 <p id="note">Reading your list…</p>
-<p id="nocode" hidden><a href="https://software.fileion.com/setup" target="_blank" rel="noopener">software.fileion.com/setup</a></p>
+<p id="nocode" hidden><a href="https://software.fileion.com/setup" target="_blank" rel="noopener">software.fileion.com/setup</a> · <a href="https://fileion.com/installer-help" target="_blank" rel="noopener">Help</a></p>
 <p id="admin" hidden>Windows asks for administrator permission once, because apps are installed for everyone on this PC.</p>
 <ul id="list" aria-live="polite"></ul>
 <p id="sum" hidden></p>
 <div class="row"><a id="log" href="log" target="_blank" rel="noopener">Open the log</a><button id="close" type="button">Close</button></div>
 </main>
-<footer><p class="priv"><span>Sends Fileion one anonymous count (apps worked / failed) when the run ends, nothing else.</span> <label><input type="checkbox" id="nosend"> Don't send</label> <a href="https://fileion.com/privacy-policy" target="_blank" rel="noopener">Privacy</a></p>Unsigned for now: Windows SmartScreen may warn on first run.</footer>
+<footer><p class="priv"><span>Sends Fileion one anonymous count (apps worked / failed) when the run ends, nothing else.</span> <label><input type="checkbox" id="nosend"> Don't send</label> <a href="https://fileion.com/privacy-policy" target="_blank" rel="noopener">Privacy</a> <a href="https://fileion.com/installer-help" target="_blank" rel="noopener">Help</a></p>Unsigned for now: Windows SmartScreen may warn on first run.</footer>
 <script>
 const label={queued:'Waiting',downloading:'Downloading',verifying:'Checking',installing:'Installing',done:'Done','up-to-date':'Up to date',mismatch:'Skipped',unsupported:'Not run',manual:'Manual',failed:'Failed',cancelled:'Stopped'};
 const el=(t,c,x)=>{const e=document.createElement(t);if(c)e.className=c;if(x!==undefined)e.textContent=x;return e};

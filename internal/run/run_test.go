@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"fileion-installer/internal/manifest"
+	"fileion-installer/internal/match"
 )
 
 func sum(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }
@@ -279,5 +280,54 @@ func TestADownloadSaysItIsTheInstallerNotABrowser(t *testing.T) {
 
 	if ua != UserAgent {
 		t.Fatalf("User-Agent = %q", ua)
+	}
+}
+
+// A name rule instead of a product code: old -> the run updates it, the next run skips it; Opera next to Opera GX stay apart.
+func TestAnAppFoundByItsNameRuleIsUpdatedThenSkipped(t *testing.T) {
+	s := &spy{}
+	body := []byte("the new installer")
+	srv := server(t, body, s)
+	installed := []match.Entry{{Name: "Opera GX Stable 117.0.1", Publisher: "Opera Software", Version: "117.0.1"}, {Name: "Opera Stable 117.0.1", Publisher: "Opera Software", Version: "117.0.1"}}
+	find := func(a manifest.App) (string, bool) {
+		if a.Match == nil {
+			return "", false
+		}
+		return match.Find(installed, *a.Match)
+	}
+	r := newRunner(t, srv, find, s)
+	r.Exec = func(ctx context.Context, name string, args []string) error { // running the installer updates the entry
+		s.execs = append(s.execs, append([]string{name}, args...))
+		if len(installed) > 1 {
+			installed[1].Version, installed[1].Name = "118.0.2", "Opera Stable 118.0.2"
+		}
+		return nil
+	}
+	opera := app(srv, sum(body))
+	opera.Version, opera.MinVersion = "118.0.2", "118.0.2"
+	opera.Match = &manifest.Match{Name: "Opera Stable ", Publisher: "Opera Software"}
+
+	if res := r.RunApp(context.Background(), opera); res.Status != Done || len(s.execs) != 1 {
+		t.Fatalf("old install: %s (%d runs)", res.Status, len(s.execs))
+	}
+	if res := r.RunApp(context.Background(), opera); res.Status != UpToDate || len(s.execs) != 1 || !strings.Contains(res.Message, "118.0.2") {
+		t.Fatalf("second run: %s %q (%d runs)", res.Status, res.Message, len(s.execs))
+	}
+	// Opera GX, still at 117.0.1, is only ever compared with its own row
+	gx := opera
+	gx.Version, gx.MinVersion = "118.0.2", "118.0.2"
+	gx.Match = &manifest.Match{Name: "Opera GX Stable ", Publisher: "Opera Software"}
+	if res := r.RunApp(context.Background(), gx); res.Status != Done || len(s.execs) != 2 {
+		t.Fatalf("Opera GX is older and must be updated: %s", res.Status)
+	}
+	// not installed at all: installed
+	installed = nil
+	if res := r.RunApp(context.Background(), opera); res.Status != Done || len(s.execs) != 3 {
+		t.Fatalf("not installed: %s", res.Status)
+	}
+	// a version that cannot be read is updated, never skipped
+	installed = []match.Entry{{Name: "Opera Stable ?", Publisher: "Opera Software", Version: "unknown"}}
+	if res := r.RunApp(context.Background(), opera); res.Status != Done {
+		t.Fatalf("unparsable version: %s", res.Status)
 	}
 }

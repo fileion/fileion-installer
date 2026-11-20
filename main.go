@@ -33,8 +33,15 @@ func main() {
 	flag.Parse()
 
 	osName := runtime.GOOS
+	if osName == "windows" {
+		sys.HideOwnConsole() // double-clicked: no black console window behind the Fileion window (from a terminal it stays)
+	}
 	if osName != "windows" && osName != "linux" {
 		fmt.Fprintln(os.Stderr, "Fileion Installer runs on Windows and Linux. On a Mac, use the command from software.fileion.com/setup.")
+		os.Exit(2)
+	}
+	if runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64" {
+		earlyFailure(nil, nil, osName, *noWindow, "This computer's processor ("+runtime.GOARCH+") is not supported by the Fileion Installer. Use the install command from software.fileion.com/setup instead.")
 		os.Exit(2)
 	}
 	logPath := filepath.Join(os.TempDir(), "fileion-installer.log")
@@ -50,7 +57,7 @@ func main() {
 	*code, source = resolveCode(*code, selfPaths())
 	if *code == "" {
 		logger.Printf("start: version %s, %s: no set code in this file", version, osName)
-		noCode(logPath, logger, osName == "windows", *noWindow)
+		earlyFailure(logger, &logPath, osName, *noWindow, "This file has no app list. Get your installer from software.fileion.com/setup")
 		os.Exit(2)
 	}
 	logger.Printf("start: version %s, code %s (from the %s), %s", version, *code, source, osName)
@@ -69,13 +76,24 @@ func main() {
 
 	win, url, err := ui.New(logPath, osName == "windows")
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "Could not start:", err)
+		logger.Printf("could not start the window: %v", err)
+		earlyFailure(logger, nil, osName, *noWindow, "The installer could not start its window: "+err.Error())
 		os.Exit(1)
 	}
 	logger.Printf("window: %s", url)
+	windowShown := *noWindow
 	if !*noWindow {
 		if err := sys.OpenWindow(url); err != nil {
 			logger.Printf("could not open the window: %v", err)
+		} else {
+			windowShown = true
+		}
+	}
+	// a failure is told in the window; when no window could be opened it is a message box (Windows) so it is never silent
+	tell := func(msg string) {
+		win.Note(ui.Sanitize(msg))
+		if !windowShown && osName == "windows" {
+			showBox(msg)
 		}
 	}
 
@@ -101,7 +119,7 @@ func main() {
 	stop()
 	if err != nil {
 		logger.Printf("manifest: %v", err)
-		win.Note(ui.Sanitize(err.Error()))
+		tell(err.Error())
 		win.Finish(0, 0)
 		waitForClose(win, *noWindow)
 		os.Exit(1)
@@ -155,23 +173,45 @@ func main() {
 	}
 }
 
-// noCode tells the person, in the window (a double-clicked file has no console, so a message on stderr would never be seen), that this
-// file has no app list, and where to get one.
-func noCode(logPath string, logger *log.Logger, windows, headless bool) {
-	const msg = "This file has no app list. Get your installer from software.fileion.com/setup"
+const helpURL = "https://fileion.com/installer-help"
+
+// showBox is the Windows message box for a failure: the message, where the help page is, and a Yes to open it.
+func showBox(msg string) {
+	if sys.MessageBox("Fileion Installer", msg+"\n\nHelp: "+helpURL+"\n\nOpen the help page now?") {
+		sys.OpenWindow(helpURL)
+	}
+}
+
+// earlyFailure reports a failure from before the progress window exists, so it is never only a line on stderr (a double-clicked program's
+// console closes the moment it exits): a message box on Windows, the Fileion window on Linux, and always stderr and the log.
+func earlyFailure(logger *log.Logger, logPath *string, osName string, headless bool, msg string) {
 	fmt.Fprintln(os.Stderr, msg)
-	win, url, err := ui.New(logPath, false)
+	if logger != nil {
+		logger.Printf("stopped: %s", msg)
+	}
+	if headless {
+		return
+	}
+	if osName == "windows" {
+		showBox(msg)
+		return
+	}
+	path := filepath.Join(os.TempDir(), "fileion-installer.log")
+	if logPath != nil {
+		path = *logPath
+	}
+	win, url, err := ui.New(path, false)
 	if err != nil {
 		return
 	}
-	logger.Printf("window: %s", url)
-	win.NoCode(msg)
-	if !headless {
-		if err := sys.OpenWindow(url); err != nil {
-			logger.Printf("could not open the window: %v", err)
-		}
+	if logger != nil {
+		logger.Printf("window: %s", url)
 	}
-	waitForClose(win, headless)
+	win.NoCode(msg)
+	if err := sys.OpenWindow(url); err != nil {
+		return
+	}
+	waitForClose(win, false)
 }
 
 // report sends the one anonymous count of the run: how many apps worked and how many did not. Nothing else leaves.
