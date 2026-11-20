@@ -169,7 +169,7 @@ jobs:
           # Same rewrite as run.DirectURL in the installer: a SourceForge /download page becomes the direct mirror link
           $url = $env:APP_URL
           if ($url -match '^https://(www\.)?sourceforge\.net/projects/([^/]+)/files/(.+?)(/download)?/?$') { $url = "https://downloads.sourceforge.net/project/$($Matches[2])/$($Matches[3])" }
-          $resp = Invoke-WebRequest -Uri $url -OutFile $file -MaximumRetryCount 3 -RetryIntervalSec 5 -PassThru
+          $resp = Invoke-WebRequest -Uri $url -UserAgent 'Fileion-Installer' -OutFile $file -MaximumRetryCount 3 -RetryIntervalSec 5 -PassThru
           $actual = (Get-FileHash $file -Algorithm SHA256).Hash.ToLower()
           $hashOk = $actual -eq $env:APP_SHA256.ToLower()
           $received = [ordered]@{ final_url = $resp.BaseResponse.RequestMessage.RequestUri.AbsoluteUri; content_type = $resp.Headers['Content-Type'] -join ','; size = (Get-Item $file).Length }

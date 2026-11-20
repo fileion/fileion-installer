@@ -162,6 +162,9 @@ func command(a manifest.App, file string) (string, []string) {
 	return file, switches
 }
 
+// UserAgent is what downloads call themselves.
+const UserAgent = "Fileion-Installer"
+
 // Received describes what a download returned, for the log when the SHA-256 does not match.
 type Received struct {
 	Size        int64
@@ -202,6 +205,8 @@ func (r *Runner) download(ctx context.Context, a manifest.App) (string, string, 
 	if err != nil {
 		return "", "", got, err
 	}
+	// SourceForge (and similar hosts) show a web page with a countdown to anything that calls itself a browser; a program that says what it is gets the file
+	req.Header.Set("User-Agent", UserAgent)
 	// A redirect to anything but https is refused
 	client := *r.Client
 	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {

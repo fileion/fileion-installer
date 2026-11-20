@@ -267,3 +267,17 @@ func TestARedirectToPlainHTTPIsRefused(t *testing.T) {
 		t.Fatalf("status %s, execs %v", res.Status, s.execs)
 	}
 }
+
+func TestADownloadSaysItIsTheInstallerNotABrowser(t *testing.T) {
+	s := &spy{}
+	var ua string
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { ua = r.UserAgent(); w.Write([]byte("x")) }))
+	t.Cleanup(srv.Close)
+	r := newRunner(t, srv, notInstalled, s)
+
+	r.RunApp(context.Background(), app(srv, sum([]byte("x"))))
+
+	if ua != UserAgent {
+		t.Fatalf("User-Agent = %q", ua)
+	}
+}
