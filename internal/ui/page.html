@@ -15,7 +15,7 @@ li b{font-weight:700}li small{display:block;color:var(--mut);font-size:13px}li s
 .done,.up-to-date{color:var(--ok)}.manual,.unsupported{color:var(--mid)}.failed,.mismatch{color:var(--bad)}.downloading,.verifying,.installing{color:var(--mid)}
 .row{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap}
 button{font:inherit;font-weight:700;min-height:40px;padding:0 18px;border-radius:10px;border:1px solid var(--line);background:var(--fg);color:var(--bg);cursor:pointer}
-a{color:var(--mid)}footer{padding:12px 22px;border-top:1px solid var(--line);font-size:13px;color:var(--mut)}
+a{color:var(--mid)}.priv{margin:0 0 6px}.priv label{white-space:nowrap;margin:0 6px;color:var(--fg)}footer{padding:12px 22px;border-top:1px solid var(--line);font-size:13px;color:var(--mut)}
 </style>
 </head>
 <body>
@@ -27,15 +27,18 @@ a{color:var(--mid)}footer{padding:12px 22px;border-top:1px solid var(--line);fon
 <p id="sum" hidden></p>
 <div class="row"><a id="log" href="log" target="_blank" rel="noopener">Open the log</a><button id="close" type="button">Close</button></div>
 </main>
-<footer>Free code signing provided by SignPath.io, certificate by SignPath Foundation.</footer>
+<footer><p class="priv"><span>Sends Fileion one anonymous count (apps worked / failed) when the run ends, nothing else.</span> <label><input type="checkbox" id="nosend"> Don't send</label> <a href="https://fileion.com/privacy-policy" target="_blank" rel="noopener">Privacy</a></p>Free code signing provided by SignPath.io, certificate by SignPath Foundation.</footer>
 <script>
 const label={queued:'Waiting',downloading:'Downloading',verifying:'Checking',installing:'Installing',done:'Done','up-to-date':'Up to date',mismatch:'Skipped',unsupported:'Not run',manual:'Manual',failed:'Failed',cancelled:'Stopped'};
 const el=(t,c,x)=>{const e=document.createElement(t);if(c)e.className=c;if(x!==undefined)e.textContent=x;return e};
+let seen=false;const box=document.getElementById('nosend');
+box.onchange=()=>fetch('report?send='+(box.checked?'0':'1'),{method:'POST'}).catch(()=>{});
 async function tick(){
  try{
   const s=await (await fetch('state',{cache:'no-store'})).json();
   document.getElementById('note').textContent=s.note||(s.finished?'Finished.':'Working through your list. You can leave this window open.');
   document.getElementById('admin').hidden=!s.admin;
+  if(!seen){seen=true;box.checked=!s.send}
   const ul=document.getElementById('list');ul.replaceChildren();
   s.rows.forEach(r=>{const li=el('li');const d=el('div');d.append(el('b','',r.name),el('small','',r.message));if(r.link){const a=el('a','','Download from Fileion');a.href=r.link;a.target='_blank';a.rel='noopener';d.append(a)}li.append(d,el('span',r.status,label[r.status]||r.status));ul.append(li)});
   const sum=document.getElementById('sum');sum.hidden=!s.finished;

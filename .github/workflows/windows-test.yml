@@ -88,7 +88,32 @@ jobs:
           $left = @(Get-Process -Name fakeapp -ErrorAction SilentlyContinue).Count
           Check 'hung installer stops at the time limit' ($out -match 'manual' -and $left -eq 0 -and $sw.Elapsed.TotalSeconds -lt 90) "$([int]$sw.Elapsed.TotalSeconds)s, processes left: $left"
 
-          # 5. a standard user, twice. (a) FILEION_INSTALLER_ELEVATED=1 is the state after a declined prompt; (b) without it, the real path: the
+          # 5. the count: sent at the end by default, and not at all when "Don't send" is ticked in the window. The window's own tick is POST report?send=0
+          #    on its local address (printed in the log); the 30 s hung installer keeps the run open long enough to do it. No -no-report here.
+          function Count-Requests { @(Select-String -Path C:\ftest\out\server.log -Pattern 'REQ POST /setup/report' -ErrorAction SilentlyContinue).Count }
+          foreach ($tick in $true, $false) {
+            Remove-Item "$env:TEMP\fileion-installer.log" -ErrorAction SilentlyContinue
+            $n0 = Count-Requests
+            $p = Start-Process $installer -ArgumentList @('-base', 'https://127.0.0.1:8443', '-no-window', '-code', 'cccc3333', '-app-timeout', '30s') -PassThru -WindowStyle Hidden -RedirectStandardOutput C:\ftest\out\case5.txt
+            $url = $null
+            for ($i = 0; $i -lt 40 -and -not $url; $i++) {
+              Start-Sleep 1
+              $m = Select-String -Path "$env:TEMP\fileion-installer.log" -Pattern 'window: (http\S+)' -ErrorAction SilentlyContinue
+              if ($m) { $url = $m.Matches[0].Groups[1].Value }
+            }
+            if ($tick -and $url) { Invoke-WebRequest -Method Post -Uri "${url}report?send=0" -UseBasicParsing | Out-Null }
+            $null = $p.WaitForExit(120000)
+            Start-Sleep 2
+            $sent = (Count-Requests) - $n0
+            $lg = Get-Content "$env:TEMP\fileion-installer.log" -Raw -ErrorAction SilentlyContinue
+            if ($tick) {
+              Check 'count: "Don''t send" ticked means no report request' ($url -and $sent -eq 0 -and $lg -match "Don't send was ticked") "window found: $([bool]$url), report requests: $sent"
+            } else {
+              Check 'count: not ticked means one report request at the end' ($url -and $sent -eq 1) "window found: $([bool]$url), report requests: $sent"
+            }
+          }
+
+          # 6. a standard user, twice. (a) FILEION_INSTALLER_ELEVATED=1 is the state after a declined prompt; (b) without it, the real path: the
           #    installer asks Windows for elevation first. A headless runner cannot click UAC: Windows accepts the request and leaves the prompt pending, so
           #    (b) asserts the attempt in the log and that nothing is installed while the prompt waits (the process is then stopped); the message is asserted in (a), the state a declined prompt leaves.
           $pw = ConvertTo-SecureString 'Fileion-Test-9x!' -AsPlainText -Force

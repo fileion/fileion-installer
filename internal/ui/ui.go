@@ -34,6 +34,7 @@ type State struct {
 	OK       int    `json:"ok"`
 	Bad      int    `json:"bad"`
 	Admin    bool   `json:"admin"`
+	Send     bool   `json:"send"`
 }
 
 // Server owns the state and the HTTP side.
@@ -60,13 +61,14 @@ func New(logPath string, admin bool) (*Server, string, error) {
 		return nil, "", err
 	}
 	s := &Server{LogPath: logPath, Closed: make(chan struct{}), token: hex.EncodeToString(b), addr: ln.Addr().String()}
-	s.state.Admin = admin
+	s.state.Admin, s.state.Send = admin, true // the count is sent unless the visitor ticks "Don't send"
 	mux := http.NewServeMux()
 	base := "/t/" + s.token + "/"
 	mux.HandleFunc(base, s.guard(s.index(base)))
 	mux.HandleFunc(base+"state", s.guard(s.getState))
 	mux.HandleFunc(base+"log", s.guard(s.log))
 	mux.HandleFunc(base+"close", s.guard(s.close))
+	mux.HandleFunc(base+"report", s.guard(s.report))
 	go http.Serve(ln, mux)
 	return s, "http://" + s.addr + base, nil
 }
@@ -123,6 +125,21 @@ func (s *Server) close(w http.ResponseWriter, r *http.Request) {
 	s.once.Do(func() { close(s.Closed) })
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// report is the "Don't send" box: POST ?send=0 stops the count, ?send=1 turns it back on.
+func (s *Server) report(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "use POST", http.StatusMethodNotAllowed)
+		return
+	}
+	s.mu.Lock()
+	s.state.Send = r.URL.Query().Get("send") != "0"
+	s.mu.Unlock()
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// SendReport is false once the visitor has ticked "Don't send"; main asks it at the end of the run, so a late tick counts.
+func (s *Server) SendReport() bool { s.mu.Lock(); defer s.mu.Unlock(); return s.state.Send }
 
 // Note sets the line above the list ("Reading your list…").
 func (s *Server) Note(text string) { s.mu.Lock(); s.state.Note = text; s.mu.Unlock() }

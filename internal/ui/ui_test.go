@@ -56,3 +56,24 @@ func TestSanitizeKeepsOneShortLine(t *testing.T) {
 		t.Errorf("len %d", len(got))
 	}
 }
+
+func TestTheCountIsSentUnlessDontSendIsTicked(t *testing.T) {
+	s, url, err := New(t.TempDir()+"/log", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s.SendReport() {
+		t.Fatal("the default must be to send")
+	}
+	if res, _ := http.Get(url + "report?send=0"); res.StatusCode != http.StatusMethodNotAllowed || !s.SendReport() {
+		t.Errorf("GET changed the choice (%d)", res.StatusCode)
+	}
+	http.Post(url+"report?send=0", "text/plain", nil)
+	if s.SendReport() {
+		t.Error("ticking Don't send must stop the count")
+	}
+	http.Post(url+"report?send=1", "text/plain", nil)
+	if !s.SendReport() {
+		t.Error("unticking must send again")
+	}
+}

@@ -72,6 +72,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "Could not start:", err)
 		os.Exit(1)
 	}
+	logger.Printf("window: %s", url)
 	if !*noWindow {
 		if err := sys.OpenWindow(url); err != nil {
 			logger.Printf("could not open the window: %v", err)
@@ -141,7 +142,11 @@ func main() {
 	}
 	win.Finish(ok, bad)
 	logger.Printf("finished: %d worked, %d did not", ok, bad)
-	if !*noReport {
+	if *noReport {
+		logger.Printf("count not sent: -no-report")
+	} else if !win.SendReport() {
+		logger.Printf("count not sent: Don't send was ticked")
+	} else {
 		report(*base, ok, bad, logger)
 	}
 	waitForClose(win, *noWindow)

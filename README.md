@@ -10,13 +10,28 @@ A small program that installs the apps you picked at [software.fileion.com/setup
    - **Windows:** skips it when it is already installed at the listed version (the product code under the Windows Uninstall registry keys); otherwise downloads the file **from the vendor's own https address only**, checks its SHA-256 against the vendor's, and runs it with the silent switch. If the SHA-256 does not match, the file is **not run**, it is deleted and the window says so.
    - **Linux:** installs it from Flathub with Flatpak, or updates it when Flatpak already has it.
 4. Shows a plain progress window: one line per app, a link to the log, a Close button, and the SignPath credit.
-5. Sends **one anonymous count** at the end: how many apps worked and how many did not. No name, IP-linked id, app list or computer detail is sent (use `-no-report` to send nothing).
+5. Sends **one anonymous count** at the end: how many apps worked and how many did not. No name, IP-linked id, app list or computer detail is sent. Tick "Don't send" in the window, or use `-no-report`, to send nothing (see Privacy).
 
 An installer that shows its own setup window or hangs is stopped after a time limit (10 minutes, `-app-timeout`) and marked "Skipped: needs manual install", with a link to the app's Fileion download page. The SHA-256 check always runs first, before anything is started.
 
 Run the same file again later and it updates the same apps.
 
 Windows asks for administrator permission once at the start, so every app installs for everyone on the PC and none asks again. On Linux, some desktops need "Allow executing file as program" ticked in the file's Properties once; Flatpak must be installed.
+
+## Privacy
+
+The installer sends Fileion **one anonymous count** at the end of a run, to `software.fileion.com`: how many apps worked and how many did not. Nothing else: no name, account, app list, computer detail or other identifier. The only other network traffic is the app list (the manifest) from software.fileion.com and each app's download from its vendor.
+
+The progress window shows this in one line, with a **Don't send** box and a Privacy link. The count is sent by default, only when the run ends, and only if the box is not ticked. To turn it off for good, run the file with `-no-report`. Full policy: [fileion.com/privacy-policy](https://fileion.com/privacy-policy).
+
+## Code signing policy
+
+Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org)
+
+- Committers and reviewers: [sjsiam](https://github.com/sjsiam)
+- Approvers: [sjsiam](https://github.com/sjsiam)
+
+Until the application to SignPath Foundation is approved, the `.exe` is unsigned and Windows SmartScreen may warn on first run. Releases are built from this repository by GitHub Actions, and the build is reproducible (see Build), so anyone can compare the SHA-256 of a release file with their own build.
 
 ## Build
 
@@ -47,7 +62,7 @@ Free code signing provided by SignPath.io, certificate by SignPath Foundation.
 | `-base` | Server for the list and the count (default `https://software.fileion.com`) |
 | `-no-window` | Print progress in the terminal |
 | `-app-timeout` | Longest one installer may run (default 10m) |
-| `-no-report` | Do not send the anonymous count |
+| `-no-report` | Do not send the anonymous count (the window's "Don't send" box does the same for one run) |
 
 ## Known limits
 
