@@ -29,17 +29,15 @@ jobs:
           go build -o C:\ftest\Fileion-Test-and-1-more-aaaa1111.exe .
           go build -o C:\ftest\www\fakeapp.exe ./tools/fakeapp
           go build -o C:\ftest\testserver.exe ./tools/testserver
-      - name: Trust a throwaway certificate and start the test server
+      - name: Trust a throwaway certificate
         run: |
           & "$env:ProgramFiles\Git\usr\bin\openssl.exe" req -x509 -newkey rsa:2048 -nodes -keyout C:\ftest\key.pem -out C:\ftest\cert.pem -days 1 -subj "/CN=localhost" -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" 2>$null
           certutil -addstore -f Root C:\ftest\cert.pem | Out-Null
-          Start-Process C:\ftest\testserver.exe -ArgumentList '-addr','127.0.0.1:8443','-dir','C:\ftest\www','-cert','C:\ftest\cert.pem','-key','C:\ftest\key.pem' -RedirectStandardError C:\ftest\out\server.log -WindowStyle Hidden
-          Start-Sleep 3
       - name: Write the test manifests
         run: |
           $sha = (Get-FileHash C:\ftest\www\fakeapp.exe -Algorithm SHA256).Hash.ToLower()
           function App($id, $name, $code, $switch, $hash) {
-            @{ id = $id; name = $name; version = '1.0'; min_version = '1.0'; url = 'https://localhost:8443/fakeapp.exe'; sha256 = $hash
+            @{ id = $id; name = $name; version = '1.0'; min_version = '1.0'; url = 'https://127.0.0.1:8443/fakeapp.exe'; sha256 = $hash
                installer_type = 'exe'; architecture = 'x64'; silent_switch = $switch; product_code = $code; winget_id = "Test.$id"; page = "https://software.fileion.com/test-$id" }
           }
           function Write-Manifest($code, $apps) {
@@ -51,6 +49,9 @@ jobs:
           Write-Manifest 'dddd4444' (App 4 'Test No Admin' '{FILEION-TEST-4}' '/S /CODE={FILEION-TEST-4}' $sha)
       - name: Run the cases
         run: |
+          # started in this step: a process left running by an earlier step is cleaned up when that step ends
+          Start-Process C:\ftest\testserver.exe -ArgumentList '-addr','127.0.0.1:8443','-dir','C:\ftest\www','-cert','C:\ftest\cert.pem','-key','C:\ftest\key.pem' -RedirectStandardError C:\ftest\out\server.log -WindowStyle Hidden
+          Start-Sleep 3
           $ErrorActionPreference = 'Continue'
           $fail = @()
           $rows = @()
@@ -61,7 +62,7 @@ jobs:
           }
           $installer = 'C:\ftest\Fileion-Test-and-1-more-aaaa1111.exe'
           $env:FILEION_INSTALLER_ELEVATED = '1'   # the runner is already an administrator: skip the permission prompt
-          $common = @('-base', 'https://localhost:8443', '-no-window', '-no-report')
+          $common = @('-base', 'https://127.0.0.1:8443', '-no-window', '-no-report')
 
           # 1. install, with the code read from the file name
           $out = & $installer @common 2>&1 | Out-String; $code1 = $LASTEXITCODE
