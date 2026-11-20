@@ -280,7 +280,7 @@ jobs:
           $doneN = ([regex]::Matches($out, '\sdone\s')).Count
           Check "both installed, run returned (processor $arch)" ($c1 -eq 0 -and $doneN -eq 2) "exit $c1, done: $doneN of 2, $([int]$sw.Elapsed.TotalSeconds) s"
           Check 'the run did not wait for the time limit' ($sw.Elapsed.TotalMinutes -lt 10) "$([int]$sw.Elapsed.TotalSeconds) s of 900"
-          Check 'the log has each installer's exit code or its detection' ($lg -match 'Notepad\+\+: installer exited after' -or $lg -match 'Notepad\+\+: detected as installed') (($lg -split "`n" | Select-String 'Notepad\+\+|VLC' | Select-Object -Last 6) -join ' // ')
+          Check 'the log has the exit code or the detection for Notepad++' ($lg -match 'Notepad\+\+: installer exited after' -or $lg -match 'Notepad\+\+: detected as installed') (($lg -split "`n" | Select-String 'Notepad\+\+|VLC' | Select-Object -Last 6) -join ' // ')
           $out = & C:\ftest\Fileion-Wait-and-1-more-bbbb8888.exe -base https://127.0.0.1:8443 -no-window -no-report 2>&1 | Out-String
           Check 'second run skips both' (([regex]::Matches($out, 'up-to-date')).Count -eq 2) 're-run'
           "### Wait-detect cases ($env:RUNNER_ARCH / ${{ matrix.os }})`n| Case | Result | Detail |`n|---|---|---|`n$($rows -join "`n")" | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
