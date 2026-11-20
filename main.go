@@ -1,0 +1,170 @@
+// Fileion Installer: reads the short code in its own file name, gets the app list from Fileion, and installs each app
+// from its publisher's own download after checking the publisher's SHA-256. Run it again and it updates the same apps.
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"path/filepath"
+	"runtime"
+	"time"
+
+	"fileion-installer/internal/manifest"
+	"fileion-installer/internal/run"
+	"fileion-installer/internal/sys"
+	"fileion-installer/internal/ui"
+)
+
+// version is set by the build (-X main.version=…)
+var version = "dev"
+
+func main() {
+	code := flag.String("code", "", "the set code (normally read from this file's name)")
+	base := flag.String("base", "https://software.fileion.com", "where the list and the count live")
+	noWindow := flag.Bool("no-window", false, "print progress instead of opening the window")
+	noReport := flag.Bool("no-report", false, "do not send the anonymous count at the end")
+	flag.Parse()
+
+	osName := runtime.GOOS
+	if osName != "windows" && osName != "linux" {
+		fmt.Fprintln(os.Stderr, "Fileion Installer runs on Windows and Linux. On a Mac, use the command from software.fileion.com/setup.")
+		os.Exit(2)
+	}
+	if *code == "" {
+		exe, _ := os.Executable()
+		*code = manifest.CodeFromFileName(exe)
+	}
+	if *code == "" {
+		fmt.Fprintln(os.Stderr, "This file's name has no set code. Get your installer again from software.fileion.com/setup.")
+		os.Exit(2)
+	}
+
+	// Windows: one permission prompt up front, so every app installs for everyone and none asks again
+	if osName == "windows" && !sys.IsAdmin() && os.Getenv("FILEION_INSTALLER_ELEVATED") != "1" {
+		os.Setenv("FILEION_INSTALLER_ELEVATED", "1")
+		if err := sys.RelaunchAsAdmin(os.Args[1:]); err == nil {
+			return
+		}
+	}
+
+	logPath := filepath.Join(os.TempDir(), "fileion-installer.log")
+	lf, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		lf = os.Stderr
+	}
+	defer lf.Close()
+	logger := log.New(lf, "", log.LstdFlags)
+	logger.Printf("start: version %s, code %s, %s", version, *code, osName)
+
+	win, url, err := ui.New(logPath, osName == "windows")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Could not start:", err)
+		os.Exit(1)
+	}
+	if !*noWindow {
+		if err := sys.OpenWindow(url); err != nil {
+			logger.Printf("could not open the window: %v", err)
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { <-win.Closed; cancel() }()
+
+	client := run.DefaultClient()
+	fetchCtx, stop := context.WithTimeout(ctx, 30*time.Second)
+	m, err := manifest.Fetch(fetchCtx, client, *base, *code, osName)
+	stop()
+	if err != nil {
+		logger.Printf("manifest: %v", err)
+		win.Note(ui.Sanitize(err.Error()))
+		win.Finish(0, 0)
+		waitForClose(win, *noWindow)
+		os.Exit(1)
+	}
+
+	names := make([]string, len(m.Apps))
+	for i, a := range m.Apps {
+		names[i] = ui.Sanitize(a.Name)
+	}
+	win.SetApps(names)
+	if len(m.Apps) == 0 {
+		win.Note("None of the apps in this list can be installed unattended. Get them from their Fileion pages.")
+	}
+
+	index := map[int]int{}
+	for i, a := range m.Apps {
+		index[a.ID] = i
+	}
+	r := &run.Runner{Client: client, TempDir: os.TempDir(), Installed: sys.Installed, Exec: sys.Exec,
+		Progress: func(a manifest.App, s run.Status, msg string) {
+			logger.Printf("%s: %s: %s", a.Name, s, msg)
+			win.Update(index[a.ID], string(s), ui.Sanitize(msg))
+			if *noWindow {
+				fmt.Printf("%-30s %-12s %s\n", a.Name, s, msg)
+			}
+		}}
+
+	ok, bad := 0, 0
+	for _, a := range m.Apps {
+		res := r.RunApp(ctx, a)
+		if res.OK() {
+			ok++
+		}
+		if res.Bad() {
+			bad++
+		}
+	}
+	win.Finish(ok, bad)
+	logger.Printf("finished: %d worked, %d did not", ok, bad)
+	if !*noReport {
+		report(*base, ok, bad, logger)
+	}
+	waitForClose(win, *noWindow)
+	if bad > 0 {
+		os.Exit(1)
+	}
+}
+
+// report sends the one anonymous count of the run: how many apps worked and how many did not. Nothing else leaves.
+func report(base string, ok, bad int, logger *log.Logger) {
+	body, _ := json.Marshal(map[string]int{"ok": ok, "failed": bad})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/setup/report", bytes.NewReader(body))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	if res, err := http.DefaultClient.Do(req); err != nil {
+		logger.Printf("count not sent: %v", err)
+	} else {
+		res.Body.Close()
+	}
+}
+
+func waitForClose(win *ui.Server, headless bool) {
+	if headless {
+		return
+	}
+	done := time.Now()
+	t := time.NewTicker(2 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-win.Closed:
+			return
+		case <-t.C:
+			if win.Abandoned(done) {
+				return
+			}
+		}
+	}
+}

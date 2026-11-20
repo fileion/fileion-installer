@@ -1,0 +1,91 @@
+# PREPARED, NOT PUSHED. Builds the Windows .exe and the Linux AppImage reproducibly and, on a tag, asks SignPath to sign the .exe.
+# Before use: the owner creates the GitHub repository and the SignPath project, and sets the values marked CHANGE-ME.
+name: build
+on:
+  push:
+    tags: ['v*']
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - run: go vet ./... && go test ./...
+      - run: GOOS=windows go vet ./...
+  windows:
+    needs: test
+    runs-on: ubuntu-24.04
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Build (reproducible: pinned Go, -trimpath, no build ID, fixed timestamp)
+        env:
+          SOURCE_DATE_EPOCH: '0'
+        run: ./build.sh "${GITHUB_REF_NAME}"
+      - id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-windows
+          path: dist/Fileion-Installer.exe
+  sign-windows:
+    # SignPath Foundation: free code signing for open-source projects; the signed publisher shows as "SignPath Foundation".
+    # Runs only on a tag and only after the owner has approved the signing request in SignPath (MFA on).
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: windows
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: 'CHANGE-ME-signpath-organization-id'
+          project-slug: 'CHANGE-ME-project-slug'
+          signing-policy-slug: 'release-signing'
+          github-artifact-id: ${{ needs.windows.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Fileion-Installer-windows-signed
+          path: signed/
+  linux:
+    needs: test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Build the binary
+        env:
+          SOURCE_DATE_EPOCH: '0'
+        run: ./build.sh "${GITHUB_REF_NAME}"
+      - name: Pack the AppImage (appimagetool is pinned by checksum)
+        run: |
+          mkdir -p AppDir/usr/bin
+          cp dist/Fileion-Installer AppDir/usr/bin/fileion-installer
+          cp packaging/AppRun AppDir/AppRun && chmod +x AppDir/AppRun
+          cp packaging/fileion-installer.desktop AppDir/
+          printf '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#1d4ed8"/></svg>' > AppDir/fileion-installer.svg
+          curl -fsSL -o appimagetool "https://github.com/AppImage/appimagetool/releases/download/1.9.0/appimagetool-x86_64.AppImage"
+          echo "CHANGE-ME-sha256-of-appimagetool-1.9.0  appimagetool" | sha256sum -c -
+          chmod +x appimagetool
+          ARCH=x86_64 ./appimagetool --appimage-extract-and-run AppDir Fileion-Installer.AppImage
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Fileion-Installer-linux
+          path: Fileion-Installer.AppImage

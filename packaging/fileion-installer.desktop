@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Fileion Installer
+Exec=fileion-installer
+Icon=fileion-installer
+Categories=Utility;
+Terminal=false

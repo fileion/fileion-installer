@@ -1,0 +1,4 @@
+#!/bin/sh
+HERE="$(dirname "$(readlink -f "$0")")"
+# The AppImage keeps its own file name (it carries the set code); the installer reads it from here
+exec "$HERE/usr/bin/fileion-installer" "$@"

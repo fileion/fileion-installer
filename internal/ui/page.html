@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fileion Installer</title>
+<style>
+:root{color-scheme:light dark;--bg:#fff;--fg:#0f172a;--mut:#475569;--line:#e2e8f0;--ok:#047857;--bad:#b42318;--mid:#1d4ed8}
+@media(prefers-color-scheme:dark){:root{--bg:#0b1220;--fg:#f1f5f9;--mut:#94a3b8;--line:#1e293b;--ok:#34d399;--bad:#f87171;--mid:#93c5fd}}
+*{box-sizing:border-box}body{margin:0;font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--bg);color:var(--fg);display:flex;flex-direction:column;min-height:100vh}
+main{flex:1;padding:20px 22px}h1{font-size:20px;margin:0 0 4px}p{margin:0 0 10px;color:var(--mut)}
+ul{list-style:none;margin:14px 0;padding:0;border:1px solid var(--line);border-radius:12px;overflow:hidden}
+li{display:flex;gap:12px;align-items:baseline;justify-content:space-between;padding:10px 14px;border-top:1px solid var(--line)}li:first-child{border-top:0}
+li b{font-weight:700}li small{display:block;color:var(--mut);font-size:13px}li span{font-weight:700;white-space:nowrap;font-size:14px}
+.done,.up-to-date{color:var(--ok)}.failed,.mismatch{color:var(--bad)}.downloading,.verifying,.installing{color:var(--mid)}
+.row{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+button{font:inherit;font-weight:700;min-height:40px;padding:0 18px;border-radius:10px;border:1px solid var(--line);background:var(--fg);color:var(--bg);cursor:pointer}
+a{color:var(--mid)}footer{padding:12px 22px;border-top:1px solid var(--line);font-size:13px;color:var(--mut)}
+</style>
+</head>
+<body>
+<main>
+<h1>Fileion Installer</h1>
+<p id="note">Reading your list…</p>
+<p id="admin" hidden>Windows asks for administrator permission once, because apps are installed for everyone on this PC.</p>
+<ul id="list" aria-live="polite"></ul>
+<p id="sum" hidden></p>
+<div class="row"><a id="log" href="log" target="_blank" rel="noopener">Open the log</a><button id="close" type="button">Close</button></div>
+</main>
+<footer>Free code signing provided by SignPath.io, certificate by SignPath Foundation.</footer>
+<script>
+const label={queued:'Waiting',downloading:'Downloading',verifying:'Checking',installing:'Installing',done:'Done','up-to-date':'Up to date',mismatch:'Skipped',unsupported:'Not run',failed:'Failed',cancelled:'Stopped'};
+const el=(t,c,x)=>{const e=document.createElement(t);if(c)e.className=c;if(x!==undefined)e.textContent=x;return e};
+async function tick(){
+ try{
+  const s=await (await fetch('state',{cache:'no-store'})).json();
+  document.getElementById('note').textContent=s.note||(s.finished?'Finished.':'Working through your list. You can leave this window open.');
+  document.getElementById('admin').hidden=!s.admin;
+  const ul=document.getElementById('list');ul.replaceChildren();
+  s.rows.forEach(r=>{const li=el('li');const d=el('div');d.append(el('b','',r.name),el('small','',r.message));li.append(d,el('span',r.status,label[r.status]||r.status));ul.append(li)});
+  const sum=document.getElementById('sum');sum.hidden=!s.finished;
+  if(s.finished)sum.textContent=s.ok+' worked, '+s.bad+' did not. Run this file again any time to update the same apps.';
+ }catch(e){}
+ setTimeout(tick,700);
+}
+document.getElementById('close').onclick=async()=>{try{await fetch('close',{method:'POST'})}catch(e){}window.close()};
+tick();
+</script>
+</body>
+</html>
