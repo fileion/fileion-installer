@@ -51,3 +51,17 @@ func TestParseRejectsGarbage(t *testing.T) {
 		t.Fatal("expected an error")
 	}
 }
+
+// The shape the live endpoint sends (SetupCatalog::manifest on software.fileion.com): Windows entries carry page, winget_id and min_version.
+func TestParseTheLiveWindowsAndLinuxShapes(t *testing.T) {
+	win := `{"code":"3fa91c0b","os":"windows","apps":[{"id":7,"name":"7-Zip","page":"https://7-zip.fileion.com/windows","winget_id":"7zip.7zip","version":"24.08","min_version":"24.08","url":"https://www.7-zip.org/a/7z2408-x64.exe","sha256":"` + strings.Repeat("a1", 32) + `","installer_type":"nullsoft","architecture":"x64","silent_switch":"/S","product_code":null}],"source":"Fileion: x"}`
+	m, err := Parse(strings.NewReader(win), "windows")
+	if err != nil || len(m.Apps) != 1 || m.Apps[0].Page != "https://7-zip.fileion.com/windows" || m.Apps[0].ProductCode != "" || m.Apps[0].WingetID != "7zip.7zip" {
+		t.Fatalf("windows: %+v, %v", m, err)
+	}
+	lin := `{"code":"3fa91c0b","os":"linux","apps":[{"id":9,"name":"VLC","flatpak_id":"org.videolan.VLC"}],"source":"x"}`
+	m, err = Parse(strings.NewReader(lin), "linux")
+	if err != nil || len(m.Apps) != 1 || m.Apps[0].FlatpakID != "org.videolan.VLC" {
+		t.Fatalf("linux: %+v, %v", m, err)
+	}
+}

@@ -52,3 +52,10 @@ Free code signing provided by SignPath.io, certificate by SignPath Foundation.
 - Apps whose installer is MSIX, a zip or a portable file, or has no silent switch, are not run: the window sends you to the app's Fileion page.
 - On Windows an app without a product code in the list cannot be told apart from "not installed", so it is installed again on a re-run.
 - Tested with Go unit tests (hash mismatch, skip-if-installed, manifest parsing, version compare, window). The Windows registry check and the permission prompt need a run on a real Windows PC.
+
+## Clean Windows VM test checklist
+
+1. Windows 10/11 VM, no admin user logged in is fine (the prompt appears). Download a file from the page once the switch is on, or rename a build to `Fileion-7-Zip-<code>.exe` with a real code.
+2. Run it: expect the permission prompt, then the window listing each app. Check: installed, "Up to date" on a second run, a deliberately wrong SHA-256 shows "Skipped" and nothing runs, an app with its own setup window is stopped at the limit (try `-app-timeout 30s`) with a Fileion link.
+3. Check `%TEMP%\fileion-installer.log`, that downloaded files are gone from `%TEMP%`, and that SmartScreen shows SignPath Foundation once signed.
+4. Edge must exist (it ships with Windows 10/11); without it the default browser opens the page.
