@@ -1,0 +1,65 @@
+# Public test list: type-default installers to run silently on a real Windows machine (windows-test.yml). Columns: title, vendor URL, SHA-256, installer type, arch, silent switch.
+title	installer_url	sha256	installer_type	arch	silent_switch
+0 A.D	https://releases.wildfiregames.com/0ad-0.28.0-win64.exe	9b5e1a16d4e0df9c84e052f56fb75da69518d5634c88d2b38db69baee63c16a1	nullsoft	x64	/S
+0 A.D	https://releases.wildfiregames.com/0ad-0.28.0-win32.exe	e2b30d28a80ea5cd9c07dce025b5c17a96f02dd1443f6802966876b2aa56642f	nullsoft	x86	/S
+1.1.1.1 w/ WARP	https://downloads.cloudflareclient.com/v1/download/windows/version/2026.8.2115.0	ab3138dbebdf132af076b5ebcb25b42345d29258acb76267c3bd1f8cfea57a53	wix	x64	/quiet /norestart
+7-Zip	https://github.com/ip7z/7zip/releases/download/26.06/7z2606-x64.msi	6dc822569e777d9a3ecd5ffcbc22b55600af87e6c5d9810a64e8566cf5a4af9f	wix	x64	/quiet /norestart
+7-Zip	https://github.com/ip7z/7zip/releases/download/26.06/7z2606.msi	1b3694f6f1449fb5ee98cbdae5b3dcce4a86e7f4929e8543dc28b89b55b89187	wix	x86	/quiet /norestart
+Android Studio	https://edgedl.me.gvt1.com/android/studio/install/2026.2.2.9/android-studio-rabbit2-patch1-windows.exe	00e98c1c23e1d27a8079951291d1ae310bbc8c7ef1030ab9db1f45a1bb96543b	nullsoft	x64	/S
+AOMEI Backupper	https://www.aomeiget.com/download/adb/AOMEIBackupperStd.exe	660208acbd0d566823ae0628e9430d903a98d1f322dfdc90f54c2c62d8e49466	inno	x86	/SP- /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+AOMEI Partition Assistant	https://www.aomeiget.com/download/pa/PAssist_Std.exe	e07307520b539041f464dea4f0340c9d3d9440f6f03bbb17175b84c833ecca2f	inno	x86	/SP- /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+Battle for Wesnoth	https://sourceforge.net/projects/wesnoth/files/wesnoth-1.18/wesnoth-1.18.4/wesnoth-1.18.4-win64.exe/download	d7211ba46831bcc456a33cdb66d6c05cf55866eb3314c0880b72b1c8df324ac2	nullsoft	x64	/S
+Bulk Rename Utility	https://www.s3.tgrmn.com/bru4/BRU_setup_4.1.0.1.exe	85c2802b285930aaac73ae76d39c6d4bf8a39f3d6e82d4eb0639c40da49911b8	inno	x64	/SP- /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+Bulk Rename Utility	https://www.s3.tgrmn.com/bru4/BRU_setup_4.1.0.1.exe	85c2802b285930aaac73ae76d39c6d4bf8a39f3d6e82d4eb0639c40da49911b8	inno	x86	/SP- /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+Code::Blocks	https://sourceforge.net/projects/codeblocks/files/Binaries/25.03/Windows/codeblocks-25.03-setup-nonadmin.exe/download	1b730f9c279f1babfdef92507078913df18cff9bbabc14dc69c2abe6628a94ed	nullsoft	x64	/S
+Code::Blocks	https://sourceforge.net/projects/codeblocks/files/Binaries/25.03/Windows/32bit/codeblocks-25.03-32bit-setup-nonadmin.exe/download	a38ea26d993dee185d279953151ac9ca976beff14af8b98679647a5bdf1d3c3a	nullsoft	x86	/S
+FastStone Capture	https://www.faststonesoft.net/DN/FSCaptureSetup113.exe	634caa2206d34baa7908ebef98110e3be1de3b3eb9b323463003a51bc04388b5	nullsoft	x86	/S
+Free Download Manager	https://dn3.freedownloadmanager.org/6/latest/fdm_x64_setup.exe	c94bcf11560c6ef709854408b8a3732023dd94494b74c39beb1ec26992349a02	inno	x64	/SP- /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+Google Chrome	https://dl.google.com/dl/chrome/install/googlechromestandaloneenterprise_arm64.msi	ac5b9053c223dca21633fb4c4c9878a7ae5f3aebe13920d9523a432540db740c	wix	arm64	/quiet /norestart
+Google Chrome	https://dl.google.com/dl/chrome/install/googlechromestandaloneenterprise64.msi	3a6e02f372f35dd9f97b4109440c5622e02db4c42406a7fd99d08145a5276ba0	wix	x64	/quiet /norestart
+Google Chrome	https://dl.google.com/dl/chrome/install/googlechromestandaloneenterprise.msi	036a2ac57bfcf7f22b73f9c7936f15bf5eb467bae1ef00b93f538078521be744	wix	x86	/quiet /norestart
+Grammarly	https://download-windows.grammarly.com/versions/1.2.310.2001/net10/x64/GrammarlyInstaller.exe	b88cfc0981ba8e105dc2a99fa1f315b704cf1d0755958c460e11f2055d08ed9e	nullsoft	x64	/S
+Grammarly	https://download-windows.grammarly.com/versions/1.2.310.2001/net10/x64/GrammarlyInstaller.exe	b88cfc0981ba8e105dc2a99fa1f315b704cf1d0755958c460e11f2055d08ed9e	nullsoft	x86	/S
+Greenshot	https://github.com/greenshot/greenshot/releases/download/v1.3.328/Greenshot-INSTALLER-1.3.328-RELEASE.exe	5d6ec298fb30c010351c100d85dec0fa6f2188833f2bc8edf594d785d9aa478a	inno	x86	/SP- /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+iVCam	https://github.com/e2eSoft/products/releases/download/v7.4/iVCam_x64_v7.4.0.exe	6b195b20a40da4afa627e41c5c6bdba5cb59dc5efe2c484f77218ed82a7fda17	inno	x64	/SP- /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+iVCam	https://github.com/e2eSoft/products/releases/download/v7.4/iVCam_x86_v7.4.0.exe	0ac136aa189fdcb58e0782d0edf5fe8ca039a38d9bdc989fedd161fad29d4393	inno	x86	/SP- /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+Minecraft	https://launcher.mojang.com/download/MinecraftInstaller.msi	e7040addf5fbb1dac0d7e61d0793b1550526accaf80a315e36b636285bd9d90e	wix	x86	/quiet /norestart
+NordVPN	https://downloads.nordcdn.com/apps/windows/NordVPN/8.16.1.0/NordVPNInstall.exe	4efd0a60af586014762b0caa2e13f6ca5f5128cd6c0165b3621648bae3201d00	inno	x64	/SP- /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+Notepad++	https://github.com/notepad-plus-plus/notepad-plus-plus/releases/download/v8.9.9.1/npp.8.9.9.1.Installer.arm64.exe	e5ac20348d83693a2816f4ed8e4a3118d5759f258af07c8cec525d1e0cc026e9	nullsoft	arm64	/S
+Notepad++	https://github.com/notepad-plus-plus/notepad-plus-plus/releases/download/v8.9.9.1/npp.8.9.9.1.Installer.x64.exe	ce3267f5c4e7e42f847e00f4b20234da6150647203033cdde34a69593efc3152	nullsoft	x64	/S
+Notepad++	https://github.com/notepad-plus-plus/notepad-plus-plus/releases/download/v8.9.9.1/npp.8.9.9.1.Installer.exe	8f6f564e628d35f20fdf0f38fa827f843c29b834c2e16f5e70091acac259df95	nullsoft	x86	/S
+Notepad++	https://github.com/notepad-plus-plus/notepad-plus-plus/releases/download/v8.9.9.1/npp.8.9.9.1.Installer.x64.msi	e3b0607a092ce2604fbdac027db2c94915995e8e568ebd226f8c5493c2f61a80	wix	x64	/quiet /norestart
+Notion	https://desktop-release.notion-static.com/Notion%20Setup%207.44.1%20arm64.exe	ac5ec44d7233663bc662f8a42aa030531c0226321106f35dd2a6c8db2bb0918a	nullsoft	arm64	/S
+Notion	https://desktop-release.notion-static.com/Notion%20Setup%207.44.1.exe	d287a31c78b706e18327d43fce511d9a26fef458cb0187d2a6ff6308b1618f3e	nullsoft	x64	/S
+OBS Studio	https://github.com/obsproject/obs-studio/releases/download/33.0.0/OBS-Studio-33.0.0-Windows-x64-Installer.exe	3bf55dae6d9db651505828090de74540296c742ed2a94a28cf055cb6ddc6bed3	nullsoft	x64	/S
+Obsidian	https://github.com/obsidianmd/obsidian-releases/releases/download/v1.15.1/Obsidian-1.15.1.exe	218c7d30acc065355ce94719dd996d5e2a2347cde3811ea5dc29380583f02b58	nullsoft	arm64	/S
+Obsidian	https://github.com/obsidianmd/obsidian-releases/releases/download/v1.15.1/Obsidian-1.15.1.exe	218c7d30acc065355ce94719dd996d5e2a2347cde3811ea5dc29380583f02b58	nullsoft	x64	/S
+Obsidian	https://github.com/obsidianmd/obsidian-releases/releases/download/v1.15.1/Obsidian-1.15.1.exe	218c7d30acc065355ce94719dd996d5e2a2347cde3811ea5dc29380583f02b58	nullsoft	x86	/S
+PDFgear	https://downloadfiles.pdfgear.com/releases/windows/pdfgear_setup_v3.0.1.exe	e55f80ac7a59c367ed1d18ff77441cd55d22a3b0f9fd3a3cfad42eed2466f684	inno	x64	/SP- /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+PowerISO	https://www.poweriso.com/arm64_poweriso_setup.exe	760cea7342becc20d5a4ae057f861bf1a93720a987805c88cc3bd6d3cb54fefb	nullsoft	arm64	/S
+PowerISO	https://www.poweriso.com/PowerISO9-x64.exe	e86986b849aa32270ede79012357161544c0647329d5e8d1d68ae505ac765c91	nullsoft	x64	/S
+PowerISO	https://www.poweriso.com/PowerISO9.exe	2f2ffe6ca58acf44fe5329a1d6fdb97bf20f02962b22ff403dc82a19287c55f4	nullsoft	x86	/S
+Prism Launcher	https://github.com/PrismLauncher/PrismLauncher/releases/download/11.1.1/PrismLauncher-Windows-MSVC-arm64-Setup-11.1.1.exe	9d3eb115701d2c51d2859cb7c9e51e63793cf66be61b7d047dc46bb164466c5f	nullsoft	arm64	/S
+Prism Launcher	https://github.com/PrismLauncher/PrismLauncher/releases/download/11.1.1/PrismLauncher-Windows-MSVC-Setup-11.1.1.exe	aaf1f371a41d530785b679e3a2e1141dceec98651fc35d56dc0842b2740280ae	nullsoft	x86	/S
+Speccy	https://download.ccleaner.com/spsetup134.exe	a7f525daeb124f90d2a07d2975f40b9ee568d56244902d3418728ce6dfd737f0	nullsoft	neutral	/S
+TeamViewer	https://download.teamviewer.com/download/version_15x/TeamViewer_Setup_x64_15.83.7.exe	d18de864f9c5dc9bf469f7352a0ec0b0ba8a47b4e0da147f69389b321bbf20dd	nullsoft	x64	/S
+TeamViewer	https://download.teamviewer.com/download/version_15x/TeamViewer_Setup_15.83.7.exe	5cea22edc793fddd76504008d42b73cb9a54b296926b1f9f53c825822d029e6e	nullsoft	x86	/S
+Visual Studio Code	https://vscode.download.prss.microsoft.com/dbazure/download/stable/69047191fc427f2f92828279aae1d90d8eeda7ab/VSCodeUserSetup-arm64-1.146.0.exe	f4b8a50821c0e11604b7a63c17fe8ce413fc7c872291927e5b82bef18e5b28ba	inno	arm64	/SP- /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+Visual Studio Code	https://vscode.download.prss.microsoft.com/dbazure/download/stable/69047191fc427f2f92828279aae1d90d8eeda7ab/VSCodeUserSetup-x64-1.146.0.exe	da5aad5fd88244ffc35d5f6c86c5214f9ceed6520888e4c5ccf3e8678e5bbf0a	inno	x64	/SP- /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+VLC Media Player	https://download.videolan.org/pub/videolan/vlc/3.0.24/winarm64/vlc-3.0.24-winarm64.exe	1377f8a7aa8094cf73bc5a36428a652f3da41017fe16a522e0f7941723000bfb	nullsoft	arm64	/S
+VLC Media Player	https://download.videolan.org/pub/videolan/vlc/3.0.24/win64/vlc-3.0.24-win64.exe	d711e1e1fe52052748c39080c7dce63f6b7e4c315efedf1774a3f1957b782ff3	nullsoft	x64	/S
+VLC Media Player	https://download.videolan.org/pub/videolan/vlc/3.0.24/win32/vlc-3.0.24-win32.exe	39928615829553bf71810119ea6ecd20cd2fa568e7ec5dfe2e48fd30819cf77a	nullsoft	x86	/S
+VLC Media Player	https://download.videolan.org/pub/videolan/vlc/3.0.24/winarm64/vlc-3.0.24-winarm64.msi	a9f5268006d51cf593a8d20edac3cc70aa65fd87ac37fa0a62c7509531996aee	wix	arm64	/quiet /norestart
+VLC Media Player	https://download.videolan.org/pub/videolan/vlc/3.0.24/win64/vlc-3.0.24-win64.msi	22172095ce4c2d5f5b600bb4c142d78105db29a77fa59a931941876f3b20f6d0	wix	x64	/quiet /norestart
+VLC Media Player	https://download.videolan.org/pub/videolan/vlc/3.0.24/win32/vlc-3.0.24-win32.msi	6a55111e19cfd4b25390fed2744eedd6f6c32d3d5bce68ec4b3c2f0f47951eb0	wix	x86	/quiet /norestart
+WampServer	https://wampserver.aviatechno.net/files/install/wampserver3.4.0_x64.exe	08bc458acb5974e3f93857c234c4daf72da8a4da842b736c1424d98b475e4fcd	inno	x64	/SP- /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+WinDirStat	https://github.com/windirstat/windirstat/releases/download/release/v2.9.3/WinDirStat-arm64.msi	4b6867dffbb0687cabfcf0a89031c95a0cbb40b36615bb73dad80e4804d59f71	wix	arm64	/quiet /norestart
+WinDirStat	https://github.com/windirstat/windirstat/releases/download/release/v2.9.3/WinDirStat-x64.msi	96c4c4beb63c7c5ad6b1a206f96560d7a9a2b6063f3cd175a82f392977a9af5d	wix	x64	/quiet /norestart
+WinDirStat	https://github.com/windirstat/windirstat/releases/download/release/v2.9.3/WinDirStat-x86.msi	077bdbbe2909db10020d8cc00dfdd7765ccf13babb0bc2fb7e32667041671c94	wix	x86	/quiet /norestart
+WinZip	https://download.winzip.com/winzip290-64.msi	9cace8d99ffa8b467fe23b2b083cd6d155c9f8021c07495da6d0477e31cd21f1	msi	x64	/quiet /norestart
+WizTree	https://diskanalyzer.com/files/wiztree_4_34_setup.exe	77e75b83b59673a49dc88ba60471776df3646baee30a82453db01ff6ad83ef2c	inno	x64	/SP- /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+WizTree	https://diskanalyzer.com/files/wiztree_4_34_setup.exe	77e75b83b59673a49dc88ba60471776df3646baee30a82453db01ff6ad83ef2c	inno	x86	/SP- /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+Xtreme Download Manager	https://github.com/subhra74/xdm/releases/download/9.0.11/xdm-9.0.11-arm64.msi	75a8be78ef3429e6bc4b80983098aa95abae5aeb248c8cae894d8b2b6c1821f1	wix	arm64	/quiet /norestart
+Xtreme Download Manager	https://github.com/subhra74/xdm/releases/download/9.0.11/xdm-9.0.11-x64.msi	25d30ca560a854080c3841659fd3e30a06a28981bcf9fc4085a3a564fb893e0b	wix	x64	/quiet /norestart
+Zoom Meetings	https://zoom.us/client/7.2.5.51704/ZoomInstallerFull.msi?archType=winarm64	7b35359606578d50f2a71e6b061bd1202dd481d2b6d0380be9ad72dcb32329c0	msi	arm64	/quiet /norestart
+Zoom Meetings	https://zoom.us/client/7.2.5.51704/ZoomInstallerFull.msi?archType=x64	8e81e0d7dc401880c4cdfd14db8bed51308608b7aa67fa1e2ca31ccaa71cad93	msi	x64	/quiet /norestart

@@ -5,9 +5,9 @@ on:
   workflow_dispatch:
     inputs:
       apps:
-        description: 'JSON list of {name, url, sha256, switch, timeout, type}; timeout in seconds, type optional (msi/wix runs through msiexec)'
+        description: 'Optional JSON list of {name, url, sha256, switch, timeout, type} (timeout in seconds; msi/wix runs through msiexec). Empty = every row of testlist/type-default.tsv'
         required: false
-        default: '[{"name":"7-Zip","url":"https://www.7-zip.org/a/7z2501-x64.exe","sha256":"78afa2a1c773caf3cf7edf62f857d2a8a5da55fb0fff5da416074c0d28b2b55f","switch":"/S","timeout":300},{"name":"Notepad++","url":"https://github.com/notepad-plus-plus/notepad-plus-plus/releases/download/v8.9.9.1/npp.8.9.9.1.Installer.x64.exe","sha256":"ce3267f5c4e7e42f847e00f4b20234da6150647203033cdde34a69593efc3152","switch":"/S","timeout":300},{"name":"VLC","url":"https://get.videolan.org/vlc/last/win64/vlc-3.0.24-win64.exe","sha256":"d711e1e1fe52052748c39080c7dce63f6b7e4c315efedf1774a3f1957b782ff3","switch":"/S","timeout":600}]'
+        default: ''
 permissions:
   contents: read
 jobs:
@@ -107,13 +107,28 @@ jobs:
           name: installer-cases
           path: C:\ftest\out\
 
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      apps: ${{ steps.list.outputs.apps }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - id: list
+        env:
+          APPS: ${{ inputs.apps }}
+        run: |
+          if [ -z "$APPS" ]; then
+            APPS=$(grep -v '^#' testlist/type-default.tsv | jq -Rsc 'split("\n")[1:] | map(select(length>0) | split("\t") | {name: (.[0] + " " + .[4]), url: .[1], sha256: .[2], type: .[3], switch: .[5], timeout: 600})')
+          fi
+          echo "apps=$APPS" >> "$GITHUB_OUTPUT"
   type-default:
+    needs: plan
     runs-on: windows-latest
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        app: ${{ fromJSON(inputs.apps) }}
+        app: ${{ fromJSON(needs.plan.outputs.apps) }}
     defaults:
       run:
         shell: pwsh
