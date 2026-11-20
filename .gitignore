@@ -1,3 +1,6 @@
 dist/
 *.exe
 *.AppImage
+rsrc_*.syso
+winres/winres.json
+first.sums

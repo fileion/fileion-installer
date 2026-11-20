@@ -35,6 +35,7 @@ type State struct {
 	Bad      int    `json:"bad"`
 	Admin    bool   `json:"admin"`
 	Send     bool   `json:"send"`
+	NoCode   bool   `json:"nocode"`
 }
 
 // Server owns the state and the HTTP side.
@@ -140,6 +141,13 @@ func (s *Server) report(w http.ResponseWriter, r *http.Request) {
 
 // SendReport is false once the visitor has ticked "Don't send"; main asks it at the end of the run, so a late tick counts.
 func (s *Server) SendReport() bool { s.mu.Lock(); defer s.mu.Unlock(); return s.state.Send }
+
+// NoCode switches the window to the one message of a file that has no app list (the page adds the link to the setup page).
+func (s *Server) NoCode(msg string) {
+	s.mu.Lock()
+	s.state.Note, s.state.NoCode, s.state.Finished = msg, true, true
+	s.mu.Unlock()
+}
 
 // Note sets the line above the list ("Reading your list…").
 func (s *Server) Note(text string) { s.mu.Lock(); s.state.Note = text; s.mu.Unlock() }

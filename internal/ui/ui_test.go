@@ -77,3 +77,27 @@ func TestTheCountIsSentUnlessDontSendIsTicked(t *testing.T) {
 		t.Error("unticking must send again")
 	}
 }
+
+func TestTheNoCodeWindowShowsTheMessageAndTheSetupLink(t *testing.T) {
+	s, url, err := New(t.TempDir()+"/log", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.NoCode("This file has no app list. Get your installer from software.fileion.com/setup")
+	res, _ := http.Get(url + "state")
+	var st State
+	json.NewDecoder(res.Body).Decode(&st)
+	res.Body.Close()
+	if !st.NoCode || !st.Finished || !strings.Contains(st.Note, "no app list") || len(st.Rows) != 0 {
+		t.Fatalf("state = %+v", st)
+	}
+	page, _ := http.Get(url)
+	body := new(strings.Builder)
+	buf := make([]byte, 1<<16)
+	n, _ := page.Body.Read(buf)
+	body.Write(buf[:n])
+	page.Body.Close()
+	if !strings.Contains(body.String(), `href="https://software.fileion.com/setup"`) {
+		t.Error("the page links to software.fileion.com/setup")
+	}
+}

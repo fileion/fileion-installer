@@ -37,6 +37,7 @@ jobs:
           New-Item -ItemType Directory -Force C:\ftest\www\setup\manifest, C:\ftest\out | Out-Null
           go build -o C:\ftest\www\fakeapp.exe ./tools/fakeapp
           go build -o C:\ftest\testserver.exe ./tools/testserver
+          go build -o C:\ftest\stamp.exe ./tools/stamp
           if ('${{ inputs.release_tag }}' -eq '') { go build -o C:\ftest\Fileion-Test-and-1-more-aaaa1111.exe . }
       - name: Use the published release instead of a fresh build
         if: inputs.release_tag != ''
@@ -162,6 +163,30 @@ jobs:
           }
           Remove-Item Env:FILEION_INSTALLER_ELEVATED -ErrorAction SilentlyContinue
           $env:TEMP = $env:RUNNER_TEMP
+
+          # 6-8. the code stamped inside the file: a renamed file works, the same file copied to another folder (a pendrive) works twice, and a file with no code says so (only for a fresh build: a published release older than v0.2.0 does not read stamps)
+          if ('${{ inputs.release_tag }}' -eq '') {
+            $env:FILEION_INSTALLER_ELEVATED = '1'
+            New-Item -ItemType Directory -Force C:\ftest\pen, C:\ftest\pen2 | Out-Null
+            $stamped = 'C:\ftest\pen\My special bundle.exe'
+            & C:\ftest\stamp.exe -code aaaa1111 C:\ftest\Fileion-Test-and-1-more-aaaa1111.exe $stamped
+            Check 'stamp tool: -show reads the code back' ((& C:\ftest\stamp.exe -show $stamped) -eq 'aaaa1111') 'stamp -show'
+            $out = & $stamped @common 2>&1 | Out-String; $code6 = $LASTEXITCODE
+            $out | Set-Content C:\ftest\out\case6-stamped-renamed.txt
+            $logged = [bool](Select-String -Path "$env:TEMP\fileion-installer.log" -Pattern 'code aaaa1111 \(from the stamp\)' -ErrorAction SilentlyContinue)
+            Check 'stamped file renamed to "My special bundle.exe" reads its list' ($code6 -eq 0 -and $out -match 'up-to-date' -and $logged) "exit $code6, log says from the stamp: $logged"
+            Copy-Item $stamped 'C:\ftest\pen2\copy of the bundle.exe'
+            $copy = 'C:\ftest\pen2\copy of the bundle.exe'
+            $out1 = & $copy @common 2>&1 | Out-String; $c7a = $LASTEXITCODE
+            $out2 = & $copy @common 2>&1 | Out-String; $c7b = $LASTEXITCODE
+            Check 'the copy runs twice on another folder (pendrive)' ($c7a -eq 0 -and $c7b -eq 0 -and $out1 -match 'up-to-date' -and $out2 -match 'up-to-date') "exit $c7a / $c7b"
+            Copy-Item C:\ftest\Fileion-Test-and-1-more-aaaa1111.exe C:\ftest\Fileion-Installer.exe
+            $out = & C:\ftest\Fileion-Installer.exe @common 2>&1 | Out-String; $code8 = $LASTEXITCODE
+            Check 'a file with no code says so (exit 2)' ($code8 -eq 2 -and $out -match 'no app list') "exit $code8"
+            $strip = 'C:\ftest\pen\stripped.exe'; & C:\ftest\stamp.exe -strip $stamped $strip
+            Check 'stripping the stamp gives the original bytes' ((Get-FileHash $strip).Hash -eq (Get-FileHash C:\ftest\Fileion-Test-and-1-more-aaaa1111.exe).Hash) 'SHA-256 of the stripped copy'
+            Remove-Item Env:FILEION_INSTALLER_ELEVATED -ErrorAction SilentlyContinue
+          }
 
           Copy-Item "$env:RUNNER_TEMP\fileion-installer.log" C:\ftest\out\installer.log -ErrorAction SilentlyContinue
           "### Installer cases`n| Case | Result | Detail |`n|---|---|---|`n$($rows -join "`n")" | Tee-Object -Append $env:GITHUB_STEP_SUMMARY

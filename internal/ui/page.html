@@ -22,6 +22,7 @@ a{color:var(--mid)}.priv{margin:0 0 6px}.priv label{white-space:nowrap;margin:0 
 <main>
 <h1>Fileion Installer</h1>
 <p id="note">Reading your list…</p>
+<p id="nocode" hidden><a href="https://software.fileion.com/setup" target="_blank" rel="noopener">software.fileion.com/setup</a></p>
 <p id="admin" hidden>Windows asks for administrator permission once, because apps are installed for everyone on this PC.</p>
 <ul id="list" aria-live="polite"></ul>
 <p id="sum" hidden></p>
@@ -37,12 +38,14 @@ async function tick(){
  try{
   const s=await (await fetch('state',{cache:'no-store'})).json();
   document.getElementById('note').textContent=s.note||(s.finished?'Finished.':'Working through your list. You can leave this window open.');
-  document.getElementById('admin').hidden=!s.admin;
+  document.getElementById('admin').hidden=!s.admin||s.nocode;
+  document.getElementById('nocode').hidden=!s.nocode;
+  if(s.nocode){document.querySelector('footer').hidden=true;document.getElementById('log').hidden=true}
   if(!seen){seen=true;box.checked=!s.send}
   const ul=document.getElementById('list');ul.replaceChildren();
   s.rows.forEach(r=>{const li=el('li');const d=el('div');d.append(el('b','',r.name),el('small','',r.message));if(r.link){const a=el('a','','Download from Fileion');a.href=r.link;a.target='_blank';a.rel='noopener';d.append(a)}li.append(d,el('span',r.status,label[r.status]||r.status));ul.append(li)});
   const sum=document.getElementById('sum');sum.hidden=!s.finished;
-  if(s.finished)sum.textContent=s.ok+' worked, '+s.bad+' did not. Run this file again any time to update the same apps.';
+  if(s.nocode)sum.hidden=true;else if(s.finished)sum.textContent=s.ok+' worked, '+s.bad+' did not. Run this file again any time to update the same apps.';
  }catch(e){}
  setTimeout(tick,700);
 }

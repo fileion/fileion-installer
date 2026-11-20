@@ -1,4 +1,4 @@
-// Fileion Installer: reads the short code in its own file name, gets the app list from Fileion, and installs each app
+// Fileion Installer: reads the short code stamped in its own file (or, failing that, in its name), gets the app list from Fileion, and installs each app
 // from its publisher's own download after checking the publisher's SHA-256. Run it again and it updates the same apps.
 package main
 
@@ -25,7 +25,7 @@ import (
 var version = "dev"
 
 func main() {
-	code := flag.String("code", "", "the set code (normally read from this file's name)")
+	code := flag.String("code", "", "the set code (normally stamped inside this file, or in its name)")
 	base := flag.String("base", "https://software.fileion.com", "where the list and the count live")
 	noWindow := flag.Bool("no-window", false, "print progress instead of opening the window")
 	appTimeout := flag.Duration("app-timeout", run.DefaultTimeout, "stop an installer that runs longer than this and mark it for manual install")
@@ -37,15 +37,6 @@ func main() {
 		fmt.Fprintln(os.Stderr, "Fileion Installer runs on Windows and Linux. On a Mac, use the command from software.fileion.com/setup.")
 		os.Exit(2)
 	}
-	if *code == "" {
-		exe, _ := os.Executable()
-		*code = manifest.CodeFromFileName(exe)
-	}
-	if *code == "" {
-		fmt.Fprintln(os.Stderr, "This file's name has no set code. Get your installer again from software.fileion.com/setup.")
-		os.Exit(2)
-	}
-
 	logPath := filepath.Join(os.TempDir(), "fileion-installer.log")
 	lf, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
@@ -53,7 +44,16 @@ func main() {
 	}
 	defer lf.Close()
 	logger := log.New(lf, "", log.LstdFlags)
-	logger.Printf("start: version %s, code %s, %s", version, *code, osName)
+
+	// The list's code: the -code flag, else stamped inside this file by Fileion (so the file can be renamed and copied), else in its name
+	var source string
+	*code, source = resolveCode(*code, selfPaths())
+	if *code == "" {
+		logger.Printf("start: version %s, %s: no set code in this file", version, osName)
+		noCode(logPath, logger, osName == "windows", *noWindow)
+		os.Exit(2)
+	}
+	logger.Printf("start: version %s, code %s (from the %s), %s", version, *code, source, osName)
 
 	// Windows: one permission prompt up front, so every app installs for everyone and none asks again
 	needAdmin := osName == "windows" && !sys.IsAdmin()
@@ -153,6 +153,25 @@ func main() {
 	if bad > 0 {
 		os.Exit(1)
 	}
+}
+
+// noCode tells the person, in the window (a double-clicked file has no console, so a message on stderr would never be seen), that this
+// file has no app list, and where to get one.
+func noCode(logPath string, logger *log.Logger, windows, headless bool) {
+	const msg = "This file has no app list. Get your installer from software.fileion.com/setup"
+	fmt.Fprintln(os.Stderr, msg)
+	win, url, err := ui.New(logPath, false)
+	if err != nil {
+		return
+	}
+	logger.Printf("window: %s", url)
+	win.NoCode(msg)
+	if !headless {
+		if err := sys.OpenWindow(url); err != nil {
+			logger.Printf("could not open the window: %v", err)
+		}
+	}
+	waitForClose(win, headless)
 }
 
 // report sends the one anonymous count of the run: how many apps worked and how many did not. Nothing else leaves.
