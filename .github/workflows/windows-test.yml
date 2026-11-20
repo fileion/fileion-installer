@@ -179,7 +179,7 @@ jobs:
             Check 'stamp tool: -show reads the code back' ((& C:\ftest\stamp.exe -show $stamped) -eq 'aaaa1111') 'stamp -show'
             $out = & $stamped @common 2>&1 | Out-String; $code6 = $LASTEXITCODE
             $out | Set-Content C:\ftest\out\case6-stamped-renamed.txt
-            $logged = [bool](Select-String -Path "$env:TEMP\fileion-installer.log" -Pattern 'code aaaa1111 \(from the stamp\)' -ErrorAction SilentlyContinue)
+            $logged = [bool](Select-String -Path (Join-Path ([IO.Path]::GetTempPath()) 'fileion-installer.log') -Pattern 'code aaaa1111 \(from the stamp\)' -ErrorAction SilentlyContinue)
             Check 'stamped file renamed to "My special bundle.exe" reads its list' ($code6 -eq 0 -and $out -match 'up-to-date' -and $logged) "exit $code6, log says from the stamp: $logged"
             Copy-Item $stamped 'C:\ftest\pen2\copy of the bundle.exe'
             $copy = 'C:\ftest\pen2\copy of the bundle.exe'
