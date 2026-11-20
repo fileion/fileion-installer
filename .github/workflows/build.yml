@@ -6,6 +6,12 @@ on:
     branches: [main]
     tags: ['v*']
   pull_request:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version string to build in, e.g. v0.1.0 (a release candidate build; the tag build of the same commit gives the same bytes)'
+        required: false
+        default: ''
 permissions:
   contents: read
 jobs:
@@ -31,7 +37,7 @@ jobs:
           cache: false
       - name: Build twice and compare (reproducible, -trimpath, no build ID, no VCS stamp)
         run: |
-          V="${GITHUB_REF_NAME//\//-}"
+          V="${{ inputs.version || github.ref_name }}"; V="${V//\//-}"
           ./build.sh "$V" > /dev/null && cp dist/SHA256SUMS first.sums
           ./build.sh "$V" && diff first.sums dist/SHA256SUMS && echo "identical on the second build"
       - name: Pack the AppImage (appimagetool is pinned by SHA-256)
