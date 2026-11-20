@@ -1,5 +1,5 @@
 // Package ui is the plain progress window: a small page served on 127.0.0.1 (random port, random path) and shown in its own
-// app-style browser window. No ads, no extras; a per-app status list, a log link, Close and the SignPath credit.
+// app-style browser window. No ads, no extras; a per-app status list, a log link and Close.
 package ui
 
 import (
