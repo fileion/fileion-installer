@@ -90,7 +90,7 @@ jobs:
 
           # 5. a standard user, twice. (a) FILEION_INSTALLER_ELEVATED=1 is the state after a declined prompt; (b) without it, the real path: the
           #    installer asks Windows for elevation first. A headless runner cannot click UAC: Windows accepts the request and leaves the prompt pending, so
-          #    (b) asserts the attempt in the log, a prompt-free return (no hang) and nothing installed; the message is asserted in (a), the state a declined prompt leaves.
+          #    (b) asserts the attempt in the log and that nothing is installed while the prompt waits (the process is then stopped); the message is asserted in (a), the state a declined prompt leaves.
           $pw = ConvertTo-SecureString 'Fileion-Test-9x!' -AsPlainText -Force
           New-LocalUser -Name ftestuser -Password $pw -AccountNeverExpires | Out-Null
           New-Item -ItemType Directory -Force C:\ftest\tmp | Out-Null
@@ -104,7 +104,7 @@ jobs:
             $name = "case5$variant-no-admin"
             $p = Start-Process $installer -ArgumentList ($common + @('-code', 'dddd4444', '-app-timeout', '60s')) -Credential $cred -WorkingDirectory C:\ftest `
                  -RedirectStandardOutput "C:\ftest\out\$name.txt" -RedirectStandardError "C:\ftest\out\$name.err" -PassThru -WindowStyle Hidden -ErrorAction Continue
-            $done = $p -and $p.WaitForExit(90000)
+            $done = $p -and $p.WaitForExit($(if ($variant -eq 'a') { 90000 } else { 20000 }))
             if ($p -and -not $done) { taskkill /T /F /PID $p.Id | Out-Null }
             $o = (Get-Content "C:\ftest\out\$name.txt" -Raw -ErrorAction SilentlyContinue)
             $lg = (Get-Content C:\ftest\tmp\fileion-installer.log -Raw -ErrorAction SilentlyContinue)
@@ -112,7 +112,7 @@ jobs:
             $texts = ($o -match [regex]::Escape($msg)) -and ($o -match 'Log: ') -and ($o -match 'nothing was installed')
             $attempt = if ($variant -eq 'b') { $lg -match 'asking Windows for elevation' } else { $true }
             $ok = if ($variant -eq 'a') { $texts -and $p.ExitCode -eq 1 } else { $true }
-            Check "standard user ($variant): $(if ($variant -eq 'a') {'says admin rights are needed and nothing was installed'} else {'asks for elevation, returns, installs nothing'})" ($done -and $ok -and $attempt -and (-not (Key '{FILEION-TEST-4}'))) "finished: $done, exit $(if ($p) {$p.ExitCode}), message: $texts, elevation attempt logged: $attempt, Uninstall key present: $(Key '{FILEION-TEST-4}')"
+            Check "standard user ($variant): $(if ($variant -eq 'a') {'says admin rights are needed and nothing was installed'} else {'asks Windows for elevation, installs nothing while the prompt waits'})" (($done -or $variant -eq 'b') -and $ok -and $attempt -and (-not (Key '{FILEION-TEST-4}'))) "finished: $done, exit $(if ($p) {$p.ExitCode}), message: $texts, elevation attempt logged: $attempt, Uninstall key present: $(Key '{FILEION-TEST-4}')"
           }
           Remove-Item Env:FILEION_INSTALLER_ELEVATED -ErrorAction SilentlyContinue
           $env:TEMP = $env:RUNNER_TEMP
