@@ -1,0 +1,30 @@
+package sys
+
+import (
+	"strings"
+	"testing"
+)
+
+func TestTheWindowIsOpenedPrivateWithNoFirstRunAndNoSyncAndItsOwnProfile(t *testing.T) {
+	args := strings.Join(EdgeArgs("http://127.0.0.1:1/t/x/", `C:\Users\p\AppData\Local`, 420, 260), " ")
+	for _, want := range []string{"--app=http://127.0.0.1:1/t/x/", "--inprivate", "--no-first-run", "--no-default-browser-check", "--disable-sync", "--window-size=420,260", `--user-data-dir=`} {
+		if !strings.Contains(args, want) {
+			t.Errorf("missing %q in %s", want, args)
+		}
+	}
+	if strings.Contains(strings.Join(EdgeArgs("u", "", 1, 1), " "), "--user-data-dir") {
+		t.Error("no profile folder without LocalAppData")
+	}
+}
+
+func TestCentreUsesTheWorkAreaAndStaysInsideIt(t *testing.T) {
+	if x, y := Centre(0, 0, 1920, 1040, 720, 300); x != 600 || y != 370 {
+		t.Errorf("%d,%d", x, y)
+	}
+	if x, y := Centre(1920, 0, 3840, 1040, 720, 300); x != 2520 || y != 370 { // second monitor
+		t.Errorf("%d,%d", x, y)
+	}
+	if x, y := Centre(0, 40, 600, 400, 720, 900); x != 0 || y != 40 { // bigger than the area
+		t.Errorf("%d,%d", x, y)
+	}
+}

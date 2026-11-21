@@ -22,6 +22,8 @@ on:
         default: ''
 permissions:
   contents: read
+env:
+  FILEION_INSTALLER_LOG_IN_TEMP: '1'   # the checks read the log in the temp folder; a normal run keeps it in %LOCALAPPDATA%\Fileion\Logs
 jobs:
   installer:
     if: inputs.set_code == '' || inputs.release_tag == ''
@@ -552,6 +554,10 @@ jobs:
           Shot 'cccc3333' 'window-running' 8
           Shot 'aaaa1111' 'window-finished' 14
           foreach ($f in "$env:TEMP\fileion-installer.log", "$env:RUNNER_TEMP\fileion-installer.log") { if (Test-Path $f) { Copy-Item $f C:\ftest\out\window-installer.log -ErrorAction SilentlyContinue; break } }   # has the 'window fit:' lines
+          $wl = Get-Content C:\ftest\out\window-installer.log -Raw -ErrorAction SilentlyContinue
+          (($wl -split "`n") | Where-Object { $_ -match 'edge args:|window position:' }) | ForEach-Object { "log: $_" } | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          if ($wl -notmatch 'edge args:.*--inprivate.*--no-first-run.*--disable-sync') { Write-Error "the log has no Edge command line with --inprivate --no-first-run --disable-sync"; exit 1 }
+          if ($wl -notmatch 'window position:.*centred') { Write-Warning "no 'window position: ... centred' line in the log" }
           "v0.2.0 first run: $($s1 -join ' x '), v0.2.0 after a big window was saved: $($s2 -join ' x '), this build: $($s3 -join ' x ')" | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           if (-not $s3 -or [Math]::Abs($s3[0] - 720) -gt 24 -or $s3[1] -gt 330 -or $s3[1] -lt 200) { Write-Error "window is $($s3 -join ' x '), want about 720 wide and 200 to 330 high (a 1-app list, no empty gap)"; exit 1 }
       - name: Keep the window screenshots

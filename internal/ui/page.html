@@ -110,7 +110,9 @@ const post=(p)=>fetch(p,{method:'POST'}).catch(()=>{});
 function mb(n){if(n>=1e9)return(n/1e9).toFixed(2)+' GB';if(n>=1e8)return Math.round(n/1e6)+' MB';return(n/1e6).toFixed(1)+' MB'}
 function clock(sec){sec=Math.max(0,Math.floor(sec));const h=Math.floor(sec/3600),m=Math.floor(sec%3600/60),s=sec%60;const p=n=>String(n).padStart(2,'0');return h?h+':'+p(m)+':'+p(s):m+':'+p(s)}
 function bar(cls,pct,name){const b=el('span','bar '+cls);b.setAttribute('role','progressbar');b.setAttribute('aria-label',name);b.setAttribute('aria-valuemin','0');b.setAttribute('aria-valuemax','100');if(pct!==null){b.setAttribute('aria-valuenow',pct);const i=el('i');i.style.width=pct+'%';b.append(i)}else b.append(el('i'));return b}
-function openLog(e){if(state&&state.finished){e.preventDefault();fetch('open-log',{method:'POST'}).then(r=>{if(!r.ok)window.open('log','_blank')}).catch(()=>window.open('log','_blank'))}}
+function openLog(e){e.preventDefault();fetch('open-log',{method:'POST'}).then(r=>{if(!r.ok)window.open('log','_blank')}).catch(()=>window.open('log','_blank'))}
+// every address outside this window opens in the person's default browser (done by the program), never in this window
+document.addEventListener('click',e=>{const a=e.target.closest&&e.target.closest('a[href^="https://"]');if(!a)return;e.preventDefault();fetch('open-url?u='+encodeURIComponent(a.href),{method:'POST'}).catch(()=>{})});
 $('log').onclick=openLog;
 
 // ---- the window fits its content. Two layouts: the start screen (420 wide) and the list (720 wide). The width is set exactly on the first layout of each. The height
@@ -203,7 +205,8 @@ function tick1(i,r,status,secs,t){ // the parts that change every second without
  if(R.lbl){
   if(status==='downloading'){
    const total=r.total||0,done=r.done||0;
-   if(total>0){const pct=Math.min(99,Math.floor(done/total*100));R.lbl.textContent=mb(done)+' of '+mb(total)+' · '+pct+'%';R.bar.setAttribute('aria-valuenow',pct);R.bar.firstChild.style.width=pct+'%'}
+   if(/^Download interrupted/.test(r.message||''))R.lbl.textContent=r.message;
+   else if(total>0){const pct=Math.min(99,Math.floor(done/total*100));R.lbl.textContent=mb(done)+' of '+mb(total)+' · '+pct+'%';R.bar.setAttribute('aria-valuenow',pct);R.bar.firstChild.style.width=pct+'%'}
    else{R.lbl.textContent=done>0?mb(done):'Downloading…'}
   }else if(status==='installing')R.lbl.textContent=stopping?'Stopping after this app…':'Installing… '+clock(secs);
   else if(status==='verifying')R.lbl.textContent='Verifying SHA-256…';

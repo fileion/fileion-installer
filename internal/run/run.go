@@ -107,7 +107,12 @@ func (r *Runner) say(a manifest.App, s Status, msg string, link string) {
 
 // RunApp installs (or updates) one Windows app from its manifest entry. A panic anywhere in the work for one app is logged with its stack and
 // becomes that app's failure: it never takes the whole run (and the window) down.
-func (r *Runner) RunApp(ctx context.Context, a manifest.App) (res Result) {
+func (r *Runner) RunApp(ctx context.Context, a manifest.App) Result {
+	return r.RunAppAhead(ctx, a, nil)
+}
+
+// RunAppAhead is RunApp with the app's download possibly already started by Ahead (take waits for it).
+func (r *Runner) RunAppAhead(ctx context.Context, a manifest.App, take func() Fetched) (res Result) {
 	defer func() {
 		if p := recover(); p != nil {
 			if r.Log != nil {
@@ -117,7 +122,7 @@ func (r *Runner) RunApp(ctx context.Context, a manifest.App) (res Result) {
 			r.say(a, res.Status, res.Message, res.Link)
 		}
 	}()
-	res = r.runApp(ctx, a)
+	res = r.runAppWith(ctx, a, take)
 	if res.Status == Unsupported || res.Status == Manual || res.Status == Failed || res.Status == Mismatch {
 		res.Link = a.Page
 	}
@@ -125,32 +130,52 @@ func (r *Runner) RunApp(ctx context.Context, a manifest.App) (res Result) {
 	return res
 }
 
-func (r *Runner) runApp(ctx context.Context, a manifest.App) Result {
+func (r *Runner) logf(a manifest.App, format string, args ...any) {
+	if r.Log != nil {
+		r.Log("%s: "+format, append([]any{a.Name}, args...)...)
+	}
+}
+
+// pre decides, without touching anything, whether the app ends before any download: stopped, a Flatpak, not understood, already current or not something
+// this program can run. done=false means it needs the download and the install.
+func (r *Runner) pre(ctx context.Context, a manifest.App) (res Result, done bool) {
 	if ctx.Err() != nil {
-		return Result{Status: Cancelled, Message: "Stopped before this one"}
+		return Result{Status: Cancelled, Message: "Stopped before this one"}, true
 	}
 	if a.FlatpakID != "" {
-		return r.runFlatpak(ctx, a)
+		return Result{}, false
 	}
 	mode := a.EffectiveMode()
 	if !a.KnownMode() {
-		return Result{Status: Unsupported, Message: "Needs a newer Fileion Installer: get it from its Fileion page"}
+		return Result{Status: Unsupported, Message: "Needs a newer Fileion Installer: get it from its Fileion page"}, true
 	}
 	kind := strings.ToLower(a.InstallerType)
 	if mode == manifest.ModePortable || mode == manifest.ModeZip {
 		if v, folder, found := r.portableAt(a); found && AtLeast(v, a.MinVersion) {
-			return Result{Status: UpToDate, Message: "Already at " + v + " in " + folder}
+			return Result{Status: UpToDate, Message: "Already at " + v + " in " + folder}, true
 		}
 	} else if v, found := r.Installed(a); found && AtLeast(v, a.MinVersion) {
-		return Result{Status: UpToDate, Message: "Already at " + v}
+		return Result{Status: UpToDate, Message: "Already at " + v}, true
 	}
 	// A kind this program cannot run (a store package), and a "silent" entry with nothing to run it with (the way older servers marked the rest)
 	if kind == "msix" || kind == "appx" || kind == "msstore" || (mode == manifest.ModeSilent && (kind == "zip" || kind == "portable" || strings.TrimSpace(a.SilentSwitch) == "")) {
-		return Result{Status: Unsupported, Message: "Needs its own installer: get it from its Fileion page"}
+		return Result{Status: Unsupported, Message: "Needs its own installer: get it from its Fileion page"}, true
 	}
+	return Result{}, false
+}
 
+// Fetched is the end of one app's download: the file (already checked: hashed over the whole file) or why there is none.
+type Fetched struct {
+	File, Sum string
+	Got       Received
+	Err       error
+}
+
+// fetchApp downloads one app (with retries) and tells the row. Stop ends it at once.
+func (r *Runner) fetchApp(ctx context.Context, a manifest.App) Fetched {
 	r.say(a, Downloading, "Downloading from the vendor", "")
 	dlCtx, endDl := context.WithCancel(ctx) // Stop ends the download, never a setup that is already running
+	defer endDl()
 	if r.StopCh != nil {
 		stop := r.StopCh()
 		go func() {
@@ -162,7 +187,30 @@ func (r *Runner) runApp(ctx context.Context, a manifest.App) Result {
 		}()
 	}
 	file, sum, got, err := r.download(dlCtx, a)
-	endDl()
+	return Fetched{file, sum, got, err}
+}
+
+// runAppWith runs one app; ahead (may be nil) is its download started earlier, waited for here, else it downloads now.
+func (r *Runner) runAppWith(ctx context.Context, a manifest.App, ahead func() Fetched) Result {
+	if res, done := r.pre(ctx, a); done {
+		if ahead != nil { // its download was started and is no longer wanted
+			if f := ahead(); f.File != "" {
+				os.Remove(f.File)
+			}
+		}
+		return res
+	}
+	if a.FlatpakID != "" {
+		return r.runFlatpak(ctx, a)
+	}
+	mode := a.EffectiveMode()
+	var f Fetched
+	if ahead != nil {
+		f = ahead()
+	} else {
+		f = r.fetchApp(ctx, a)
+	}
+	file, sum, got, err := f.File, f.Sum, f.Got, f.Err
 	if err != nil {
 		if ctx.Err() != nil {
 			return Result{Status: Cancelled, Message: "Stopped"}
@@ -170,7 +218,8 @@ func (r *Runner) runApp(ctx context.Context, a manifest.App) Result {
 		if r.Stopped != nil && r.Stopped() {
 			return Result{Status: NotRun, Message: "Not run"}
 		}
-		return Result{Status: Failed, Message: "Download failed: " + err.Error()}
+		r.logf(a, "download failed: %v", err)
+		return Result{Status: Failed, Message: "Couldn't download from the vendor"}
 	}
 	defer os.Remove(file)
 
@@ -246,7 +295,7 @@ func (r *Runner) remember(a manifest.App, dir, exe string) {
 func (r *Runner) placePortable(a manifest.App, file string) Result {
 	dir, err := r.appFolder(a)
 	if err != nil {
-		return Result{Status: Failed, Message: "Could not make the app's folder: " + err.Error()}
+		return Result{Status: Failed, Message: "Could not make the app's folder (details are in the log)"}
 	}
 	name := portable.SafeName(filepath.Base(strings.SplitN(strings.TrimSuffix(strings.SplitN(a.URL, "?", 2)[0], "/download"), "#", 2)[0]))
 	if filepath.Ext(name) == "" {
@@ -257,7 +306,8 @@ func (r *Runner) placePortable(a manifest.App, file string) Result {
 		return Result{Status: Failed, Message: "Could not save the file: its place is a link"}
 	}
 	if err := portable.MoveFile(file, target); err != nil {
-		return Result{Status: Failed, Message: "Could not save the file: " + err.Error()}
+		r.logf(a, "could not save the file: %v", err)
+		return Result{Status: Failed, Message: "Could not save the file (details are in the log)"}
 	}
 	r.remember(a, dir, target)
 	return Result{Status: Saved, Message: "Saved in " + r.shown(dir)}
@@ -267,11 +317,12 @@ func (r *Runner) placePortable(a manifest.App, file string) Result {
 func (r *Runner) unpackZip(a manifest.App, file string) Result {
 	dir, err := r.appFolder(a)
 	if err != nil {
-		return Result{Status: Failed, Message: "Could not make the app's folder: " + err.Error()}
+		return Result{Status: Failed, Message: "Could not make the app's folder (details are in the log)"}
 	}
 	r.say(a, Unpacking, "Unpacking…", "")
 	if err := portable.Unzip(file, dir); err != nil {
-		return Result{Status: Failed, Message: "Could not unpack: " + err.Error()}
+		r.logf(a, "could not unpack: %v", err)
+		return Result{Status: Failed, Message: "Could not unpack the file (details are in the log)"}
 	}
 	r.remember(a, dir, portable.FindExe(dir, a.ZipExe))
 	return Result{Status: Saved, Message: "Saved in " + r.shown(dir)}
@@ -449,7 +500,7 @@ func (r *Runner) install(ctx context.Context, a manifest.App, name string, args 
 			return Result{Status: Cancelled, Message: "Stopped"}
 		}
 		if err != nil {
-			return Result{Status: Failed, Message: "The installer reported: " + err.Error()}
+			return Result{Status: Failed, Message: fmt.Sprintf("The installer did not finish (exit code %d). Details are in the log.", code)}
 		}
 		return Result{Status: Done, Message: "Installed " + strings.TrimSpace(a.Version)}
 	}
@@ -536,7 +587,8 @@ func (r *Runner) runFlatpak(ctx context.Context, a manifest.App) Result {
 		if ctx.Err() != nil {
 			return Result{Status: Cancelled, Message: "Stopped"}
 		}
-		return Result{Status: Failed, Message: "Flatpak reported: " + err.Error()}
+		r.logf(a, "flatpak: %v", err)
+		return Result{Status: Failed, Message: "Flatpak could not finish (details are in the log)"}
 	}
 	return Result{Status: Done, Message: msg}
 }
@@ -582,7 +634,17 @@ func DirectURL(raw string) string {
 	return "https://downloads.sourceforge.net/project/" + parts[1] + "/" + path
 }
 
-// download writes the vendor file to the temp folder and returns its path and SHA-256. Only https, also across redirects.
+// Retries is how many times a download that breaks off is started again; BackoffFor is the wait before try n (1-based). Tests shorten it.
+const Retries = 3
+
+var BackoffFor = func(n int) time.Duration { return time.Duration(2*n*n) * time.Second } // 2 s, 8 s, 18 s
+
+// permanent is an answer that trying again cannot change (a missing file, a refusal): not retried.
+type permanent struct{ error }
+
+// download writes the vendor file to the temp folder and returns its path and SHA-256. Only https, also across redirects. A download that breaks off
+// (the connection is reset, a 5xx) is tried again up to Retries times with a growing wait, and continues from the bytes already there (HTTP Range) when
+// the vendor allows it, else starts over. The SHA-256 is always taken over the WHOLE file at the end, never over the parts. The temp file is removed on every error.
 func (r *Runner) download(ctx context.Context, a manifest.App) (string, string, Received, error) {
 	var got Received
 	if !strings.HasPrefix(a.URL, "https://") {
@@ -592,56 +654,132 @@ func (r *Runner) download(ctx context.Context, a manifest.App) (string, string, 
 	if len(ext) > 6 || ext == "" {
 		ext = ".exe"
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, DirectURL(a.URL), nil)
-	if err != nil {
-		return "", "", got, err
-	}
-	// SourceForge (and similar hosts) show a web page with a countdown to anything that calls itself a browser; a program that says what it is gets the file
-	req.Header.Set("User-Agent", UserAgent)
-	// A redirect to anything but https is refused
-	client := *r.Client
-	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-		if req.URL.Scheme != "https" {
-			return fmt.Errorf("redirected to a non-https address")
-		}
-		if len(via) >= 10 {
-			return fmt.Errorf("too many redirects")
-		}
-		return nil
-	}
-	res, err := client.Do(req)
-	if err != nil {
-		return "", "", got, err
-	}
-	defer res.Body.Close()
-	got.FinalURL, got.ContentType = res.Request.URL.String(), res.Header.Get("Content-Type")
-	if res.StatusCode != http.StatusOK {
-		return "", "", got, fmt.Errorf("the vendor answered HTTP %d", res.StatusCode)
-	}
 	f, err := os.CreateTemp(r.TempDir, "fileion-*"+ext)
 	if err != nil {
 		return "", "", got, err
 	}
-	h := sha256.New()
-	total := max(res.ContentLength, 0) // -1 = the vendor does not say
-	tell := func(done, total int64) {
-		if r.Transfer != nil {
-			r.Transfer(a, done, total)
-		}
-	}
-	n, err := io.Copy(io.MultiWriter(f, h, &progress{total: total, tell: tell}), res.Body)
-	tell(n, total) // the last figure, whatever the pace of the updates
-	got.Size = n
-	if err != nil {
+	fail := func(err error) (string, string, Received, error) {
 		f.Close()
 		os.Remove(f.Name())
 		return "", "", got, err
 	}
+	var have int64
+	var validator string // ETag or Last-Modified of the first answer: a resumed range is only taken if the file is still the same
+	for attempt := 0; ; attempt++ {
+		err = r.fetchPart(ctx, a, f, &have, &validator, &got)
+		if err == nil {
+			break
+		}
+		var perm permanent
+		if ctx.Err() != nil || errors.As(err, &perm) || attempt >= Retries {
+			return fail(err)
+		}
+		r.logf(a, "download interrupted after %d bytes (%v): try %d of %d, %s", have, err, attempt+1, Retries, BackoffFor(attempt+1))
+		r.say(a, Downloading, "Download interrupted. Retrying…", "")
+		select {
+		case <-ctx.Done():
+			return fail(ctx.Err())
+		case <-time.After(BackoffFor(attempt + 1)):
+		}
+		r.say(a, Downloading, "Downloading from the vendor", "")
+	}
+	// the hash over the whole file, as it is on disk
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return fail(err)
+	}
+	h := sha256.New()
+	n, err := io.Copy(h, f)
+	if err != nil {
+		return fail(err)
+	}
+	got.Size = n
 	if err := f.Close(); err != nil {
 		os.Remove(f.Name())
 		return "", "", got, err
 	}
 	return f.Name(), hex.EncodeToString(h.Sum(nil)), got, nil
+}
+
+// fetchPart asks for the file (from byte *have on, when something is already there) and appends what arrives to f, keeping *have exact.
+func (r *Runner) fetchPart(ctx context.Context, a manifest.App, f *os.File, have *int64, validator *string, got *Received) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, DirectURL(a.URL), nil)
+	if err != nil {
+		return permanent{err}
+	}
+	// SourceForge (and similar hosts) show a web page with a countdown to anything that calls itself a browser; a program that says what it is gets the file
+	req.Header.Set("User-Agent", UserAgent)
+	if *have > 0 {
+		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", *have))
+		if *validator != "" {
+			req.Header.Set("If-Range", *validator)
+		}
+	}
+	// A redirect to anything but https is refused
+	client := *r.Client
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if req.URL.Scheme != "https" {
+			return permanent{fmt.Errorf("redirected to a non-https address")}
+		}
+		if len(via) >= 10 {
+			return permanent{fmt.Errorf("too many redirects")}
+		}
+		return nil
+	}
+	res, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	got.FinalURL, got.ContentType = res.Request.URL.String(), res.Header.Get("Content-Type")
+	total := max(res.ContentLength, 0) // -1 = the vendor does not say
+	switch {
+	case res.StatusCode == http.StatusPartialContent && *have > 0 && strings.HasPrefix(res.Header.Get("Content-Range"), fmt.Sprintf("bytes %d-", *have)):
+		total += *have // the range's length is the rest; the whole file is what the person is waiting for
+	case res.StatusCode == http.StatusOK: // the whole file again: the vendor does not do ranges (or the file changed)
+		*have = 0
+		if err := f.Truncate(0); err != nil {
+			return permanent{err}
+		}
+		if *validator = res.Header.Get("ETag"); *validator == "" {
+			*validator = res.Header.Get("Last-Modified")
+		}
+	case res.StatusCode == http.StatusRequestedRangeNotSatisfiable || res.StatusCode == http.StatusPartialContent:
+		*have = 0 // unusable: start over on the next try
+		_ = f.Truncate(0)
+		return fmt.Errorf("the vendor's answer to a range request was unusable (HTTP %d)", res.StatusCode)
+	case res.StatusCode >= 500 || res.StatusCode == http.StatusTooManyRequests:
+		return fmt.Errorf("the vendor answered HTTP %d", res.StatusCode)
+	default:
+		return permanent{fmt.Errorf("the vendor answered HTTP %d", res.StatusCode)}
+	}
+	if _, err := f.Seek(*have, io.SeekStart); err != nil {
+		return permanent{err}
+	}
+	tell := func(done, total int64) {
+		if r.Transfer != nil {
+			r.Transfer(a, done, total)
+		}
+	}
+	pw := &progress{done: *have, total: total, tell: tell}
+	cw := &countWriter{f: f, n: have}
+	_, err = io.Copy(io.MultiWriter(cw, pw), res.Body)
+	tell(*have, total) // the last figure, whatever the pace of the updates
+	if err == nil && res.ContentLength >= 0 && *have != total {
+		err = io.ErrUnexpectedEOF
+	}
+	return err
+}
+
+// countWriter writes to the file and counts what really reached it.
+type countWriter struct {
+	f *os.File
+	n *int64
+}
+
+func (c *countWriter) Write(b []byte) (int, error) {
+	n, err := c.f.Write(b)
+	*c.n += int64(n)
+	return n, err
 }
 
 // progress counts the bytes of a download and reports them at most four times a second, and once more at the end.

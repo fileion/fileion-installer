@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -26,7 +27,15 @@ type portableFiles struct {
 // newPortableFiles takes the person's own folders from -user-dirs (the first copy of the installer knows them even when an administrator's name is
 // used for elevation), else from Windows for this process.
 func newPortableFiles(userDirs string, logger *log.Logger) *portableFiles {
-	dl, pr, la := sys.UserDirs()
+	dl, pr, la := userFolders(userDirs)
+	return &portableFiles{appsDir: filepath.Join(dl, "Fileion Apps"), startDir: pr,
+		store: &portable.Store{Path: filepath.Join(la, "Fileion", "portable.json")}, logger: logger, known: map[int]portable.Entry{}}
+}
+
+// userFolders gives the signed-in person's Downloads, Start menu Programs and LocalAppData folders: from -user-dirs when the elevated copy was given
+// them by the first copy, else from Windows for this process.
+func userFolders(userDirs string) (dl, pr, la string) {
+	dl, pr, la = sys.UserDirs()
 	dirs := []*string{&dl, &pr, &la}
 	if parts := strings.Split(userDirs, "|"); len(parts) == 3 {
 		for i, p := range parts {
@@ -42,8 +51,7 @@ func newPortableFiles(userDirs string, logger *log.Logger) *portableFiles {
 	if la == "" {
 		la = os.TempDir()
 	}
-	return &portableFiles{appsDir: filepath.Join(dl, "Fileion Apps"), startDir: filepath.Join(pr, "Fileion Apps"),
-		store: &portable.Store{Path: filepath.Join(la, "Fileion", "portable.json")}, logger: logger, known: map[int]portable.Entry{}}
+	return
 }
 
 // placed is told by the runner when a portable app or a zip is in its folder: the row gets its buttons.
@@ -55,7 +63,8 @@ func (p *portableFiles) placed(win *ui.Server, i int, a manifest.App, folder, ex
 	}
 	p.known[i] = e
 	p.mu.Unlock()
-	win.Mutate(i, func(r *ui.Row) { r.Folder, r.CanRun, r.InStart = folder, exe != "", e.StartMenu })
+	inStart := e.StartMenu && fileExists(p.shortcut(e)) // the saved flag is only believed when the shortcut is really there
+	win.Mutate(i, func(r *ui.Row) { r.Folder, r.CanRun, r.InStart = folder, exe != "", inStart })
 }
 
 func (p *portableFiles) shortcut(e portable.Entry) string {
@@ -82,7 +91,14 @@ func (p *portableFiles) rowAction(win *ui.Server) func(i int, action string) {
 			err = sys.OpenFolder(e.Folder)
 		case "start":
 			if e.Exe != "" {
-				if err = sys.CreateShortcut(p.shortcut(e), e.Exe, e.Folder); err == nil {
+				lnk := p.shortcut(e)
+				err = sys.CreateShortcut(lnk, e.Exe, e.Folder)
+				// "In Start menu" is shown only once the .lnk is really in the person's Programs folder
+				if err == nil && !fileExists(lnk) {
+					err = fmt.Errorf("the shortcut %s was not created", lnk)
+				}
+				p.logger.Printf("%s: start menu shortcut %s: exists=%v err=%v", e.Name, lnk, fileExists(lnk), err)
+				if err == nil {
 					e.StartMenu = true
 					p.save(i, e)
 					win.Mutate(i, func(r *ui.Row) { r.InStart = true })
@@ -96,7 +112,7 @@ func (p *portableFiles) rowAction(win *ui.Server) func(i int, action string) {
 		}
 		if err != nil {
 			p.logger.Printf("%s: %s: %v", e.Name, action, err)
-			win.Mutate(i, func(r *ui.Row) { r.Message = ui.Sanitize("Could not " + action + ": " + err.Error()) })
+			win.Mutate(i, func(r *ui.Row) { r.Message = "Could not " + action + " (details are in the log)" })
 		}
 	}
 }
@@ -127,4 +143,9 @@ func (p *portableFiles) move(win *ui.Server, i int, e portable.Entry, dst string
 	p.save(i, e)
 	win.Mutate(i, func(r *ui.Row) { r.Folder, r.Message = dst, ui.Sanitize("Moved to "+dst) })
 	return nil
+}
+
+func fileExists(path string) bool {
+	st, err := os.Stat(path)
+	return err == nil && !st.IsDir()
 }
