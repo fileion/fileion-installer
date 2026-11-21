@@ -8,7 +8,7 @@
 //
 // Those PNGs are committed, so a build never needs the SVG, a browser or the network. To change the mark, replace the PNGs and run:
 //
-//	go run ./tools/mkicon winres icons out
+//	go run ./tools/mkicon run
 //
 // which writes winres/icon.ico (16, 24, 32, 48, 64 and 256 px images, PNG-compressed), internal/ui/icon-{32,64,192,512}.png (the progress window's favicon and
 // web manifest) and packaging/fileion-installer.png (the 256 px AppImage icon), so the window, the AppImage and the .exe show the same mark.
