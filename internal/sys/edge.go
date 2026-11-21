@@ -1,26 +1,73 @@
 package sys
 
-import "path/filepath"
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+)
 
 // Log gets what the window code did (the exact Edge command line, window moves, how a link was opened): a run is checked from the log file.
 var Log = func(format string, args ...any) {}
 
-// EdgeArgs is the command line of the installer's window. Sources:
+// EdgeArgs is the command line of the installer's window: a normal (not private) app window with its own profile folder. Sources:
 //   - --app, --window-size, --user-data-dir, --no-first-run, --no-default-browser-check, --disable-sync: Chromium switches that Edge shares
 //     (Edge publishes no list of its own: https://textslashplain.com/2022/01/05/edge-command-line-arguments says to use Chromium's).
-//   - --inprivate: Edge's documented private-window switch. An InPrivate window has no signed-in profile and no sync, so the Windows account is not
-//     signed in to it. Edge's own implicit sign-in has no switch: its only documented control is the policy ImplicitSignInEnabled
+//   - Edge's implicit sign-in has no switch; its only documented control is the policy ImplicitSignInEnabled
 //     (https://learn.microsoft.com/en-us/deployedge/microsoft-edge-policies/implicitsigninenabled), a registry setting for every Edge window of the
-//     person, which a program must not change.
-//
-// x, y are the window's top-left in pixels, or -1,-1 to leave it to Edge (the window is also centred after it opens: see CenterLoop).
+//     person, which a program must not change. So the window's own profile is seeded with Chromium's sign-in prefs instead: see SeedProfile.
+//   - --inprivate was tried in v0.3.2 and dropped: the title read "Fileion Installer - [InPrivate]" with a dark title bar.
 func EdgeArgs(url, localAppData string, w, h int) []string {
-	args := []string{"--app=" + url, "--inprivate", "--no-first-run", "--no-default-browser-check", "--disable-sync", "--window-size=" + itoa(w) + "," + itoa(h)}
+	args := []string{"--app=" + url, "--no-first-run", "--no-default-browser-check", "--disable-sync", "--window-size=" + itoa(w) + "," + itoa(h)}
 	if localAppData != "" {
 		// Its own profile folder: in the person's default one Edge restores the window size it saved from older runs and ignores --window-size
-		args = append(args, "--user-data-dir="+filepath.Join(localAppData, "Fileion", "window"))
+		args = append(args, "--user-data-dir="+ProfileDir(localAppData))
 	}
 	return args
+}
+
+// ProfileDir is the window's own Edge profile folder.
+func ProfileDir(localAppData string) string { return filepath.Join(localAppData, "Fileion", "window") }
+
+// SeedProfile turns the window profile's sign-in off before Edge starts, by merging two keys into Default\Preferences and leaving every other key (the
+// saved window placement, Edge's own) as it is:
+//   - signin.allowed = false: Chromium's kSigninAllowed, "whether the user may sign in" (components/signin/public/base/signin_pref_names.cc,
+//     https://source.chromium.org/chromium/chromium/src/+/main:/components/signin/public/base/signin_pref_names.cc). Chromium recomputes it at
+//     startup from signin.allowed_on_next_startup (chrome/browser/signin/account_consistency_mode_manager.cc), so that one is set too.
+//   - signin.allowed_on_next_startup = false.
+//
+// No Edge-specific implicit-sign-in preference is documented anywhere we could find, so none is written. It returns what it did, for the log.
+func SeedProfile(localAppData string) (string, error) {
+	dir := filepath.Join(ProfileDir(localAppData), "Default")
+	file := filepath.Join(dir, "Preferences")
+	prefs := map[string]any{}
+	if b, err := os.ReadFile(file); err == nil {
+		if err := json.Unmarshal(b, &prefs); err != nil {
+			return "", fmt.Errorf("the profile's Preferences is not JSON (left as it is): %w", err)
+		}
+	}
+	si, _ := prefs["signin"].(map[string]any)
+	if si == nil {
+		si = map[string]any{}
+	}
+	si["allowed"], si["allowed_on_next_startup"] = false, false
+	prefs["signin"] = si
+	out, err := json.Marshal(prefs)
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	tmp := file + ".fileion-tmp"
+	if err := os.WriteFile(tmp, out, 0o600); err != nil {
+		return "", err
+	}
+	if err := os.Rename(tmp, file); err != nil {
+		os.Remove(tmp)
+		return "", err
+	}
+	return "signin.allowed=false signin.allowed_on_next_startup=false in " + file, nil
 }
 
 func itoa(n int) string {

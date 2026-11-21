@@ -196,7 +196,15 @@ func RelaunchAsAdmin(args []string) (func() (int, error), error) {
 func OpenWindow(url string) error {
 	for _, edge := range []string{os.Getenv("ProgramFiles(x86)") + `\Microsoft\Edge\Application\msedge.exe`, os.Getenv("ProgramFiles") + `\Microsoft\Edge\Application\msedge.exe`} {
 		if _, err := os.Stat(edge); err == nil {
-			args := EdgeArgs(url, os.Getenv("LOCALAPPDATA"), 420, 260)
+			la := os.Getenv("LOCALAPPDATA")
+			if la != "" {
+				if what, err := SeedProfile(la); err != nil {
+					Log("edge sign-in: method=profile prefs FAILED (%v): the window opens anyway", err)
+				} else {
+					Log("edge sign-in: method=profile prefs, wrote %s", what)
+				}
+			}
+			args := EdgeArgs(url, la, 420, 260)
 			Log("edge args: %s", strings.Join(args[1:], " "))
 			return exec.Command(edge, args...).Start()
 		}
