@@ -20,7 +20,9 @@ sed -e "s/@VERSION@/${VERSION#v}/g" -e "s/@FILEVERSION@/$FILEVERSION/g" winres/w
 rm -f winres/winres.json
 FLAGS="-trimpath -buildvcs=false -ldflags=-s\ -w\ -buildid=\ -X\ main.version=${VERSION}"
 # exported in a subshell: a GOOS=… prefix on `eval` is not passed on to `go` by dash (the CI shell), which built a Linux file named .exe
-( export GOOS=windows GOARCH=amd64; eval go build $FLAGS -o dist/Fileion-Installer.exe . )
+# The Windows file is a GUI program (-H=windowsgui, PE subsystem 2): Windows never makes a console window for it, however it is started
+WFLAGS="-trimpath -buildvcs=false -ldflags=-s\ -w\ -H=windowsgui\ -buildid=\ -X\ main.version=${VERSION}"
+( export GOOS=windows GOARCH=amd64; eval go build $WFLAGS -o dist/Fileion-Installer.exe . )
 ( export GOOS=linux GOARCH=amd64; eval go build $FLAGS -o dist/Fileion-Installer . )
 ( cd dist && shasum -a 256 Fileion-Installer.exe Fileion-Installer > SHA256SUMS )
 cat dist/SHA256SUMS

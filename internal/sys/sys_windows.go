@@ -170,8 +170,7 @@ var (
 	user32           = syscall.NewLazyDLL("user32.dll")
 	kernel32         = syscall.NewLazyDLL("kernel32.dll")
 	messageBoxW      = user32.NewProc("MessageBoxW")
-	getConsoleList   = kernel32.NewProc("GetConsoleProcessList")
-	freeConsole      = kernel32.NewProc("FreeConsole")
+	attachConsole    = kernel32.NewProc("AttachConsole")
 	mbYesNoIconError = uintptr(0x4 | 0x10) // MB_YESNO | MB_ICONERROR
 	idYes            = uintptr(6)
 )
@@ -185,15 +184,24 @@ func MessageBox(title, text string) bool {
 	return r == idYes
 }
 
-// HideOwnConsole closes the console window when this program is the only process in it, which is what a double click in Explorer
-// gives (run from Command Prompt or PowerShell the shell shares the console, so it stays and output is still shown).
-func HideOwnConsole() {
-	var pids [4]uint32
-	n, _, _ := getConsoleList.Call(uintptr(unsafe.Pointer(&pids[0])), uintptr(len(pids)))
-	if n == 1 {
-		freeConsole.Call()
+// AttachParentConsole lets a GUI program (no console of its own) print to the terminal it was started from: -no-window output and early error text show up
+// there. Nothing is done when stdout and stderr are already real handles (redirected to a file or a pipe), or when there is no parent console
+// (a double click): then nothing is printed, and the log file and the window carry everything.
+func AttachParentConsole() {
+	for _, f := range []*os.File{os.Stdout, os.Stderr} {
+		if f != nil && validHandle(f.Fd()) {
+			return
+		}
+	}
+	if r, _, _ := attachConsole.Call(^uintptr(0)); r == 0 { // ATTACH_PARENT_PROCESS = -1
+		return
+	}
+	if out, err := os.OpenFile("CONOUT$", os.O_WRONLY, 0); err == nil {
+		os.Stdout, os.Stderr = out, out
 	}
 }
+
+func validHandle(h uintptr) bool { return h != 0 && h != ^uintptr(0) }
 
 // OpenFile opens a file in the person's own program (Notepad for a log), so the window can show the log file itself, not a localhost address.
 func OpenFile(path string) error {

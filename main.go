@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -35,9 +36,7 @@ func main() {
 	flag.Parse()
 
 	osName := runtime.GOOS
-	if osName == "windows" {
-		sys.HideOwnConsole() // double-clicked: no black console window behind the Fileion window (from a terminal it stays)
-	}
+	sys.AttachParentConsole() // a Windows GUI program has no console: from a terminal, output goes to that terminal
 	if osName != "windows" && osName != "linux" {
 		fmt.Fprintln(os.Stderr, "Fileion Installer runs on Windows and Linux. On a Mac, use the command from software.fileion.com/setup.")
 		os.Exit(2)
@@ -49,10 +48,14 @@ func main() {
 	logPath := filepath.Join(os.TempDir(), "fileion-installer.log")
 	lf, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
-		lf = os.Stderr
+		lf = nil
 	}
-	defer lf.Close()
-	logger := log.New(lf, "", log.LstdFlags)
+	var logOut io.Writer = io.Discard // a GUI program's stderr may be no handle at all
+	if lf != nil {
+		defer lf.Close()
+		logOut = lf
+	}
+	logger := log.New(logOut, "", log.LstdFlags)
 
 	// The list's code: the -code flag, else stamped inside this file by Fileion (so the file can be renamed and copied), else in its name
 	var source string

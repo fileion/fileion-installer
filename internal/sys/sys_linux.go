@@ -43,8 +43,8 @@ func OpenWindow(url string) error {
 // MessageBox is Windows-only: here it shows nothing and reports "no".
 func MessageBox(title, text string) bool { return false }
 
-// HideOwnConsole is Windows-only.
-func HideOwnConsole() {}
+// AttachParentConsole is Windows-only.
+func AttachParentConsole() {}
 
 // OpenFile opens a file with the desktop's default program.
 func OpenFile(path string) error { return exec.Command("xdg-open", path).Start() }
