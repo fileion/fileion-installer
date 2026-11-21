@@ -170,28 +170,7 @@ func main() {
 	}
 	m.Apps = manifest.OrderForRun(m.Apps) // the apps that need the person come last
 
-	names := make([]string, len(m.Apps))
-	for i, a := range m.Apps {
-		names[i] = ui.Sanitize(a.Name)
-	}
-	win.SetApps(names)
-	for i, a := range m.Apps {
-		k, icon := a.EffectiveMode(), ui.SafeIcon(a.Icon)
-		win.Mutate(i, func(r *ui.Row) {
-			r.Icon = icon
-			if k == manifest.ModePortable || k == manifest.ModeZip || k == manifest.ModeInteractive {
-				r.Kind = k
-			}
-		})
-	}
-	if len(m.Apps) == 0 {
-		win.Note("None of the apps in this list can be installed unattended. Get them from their Fileion pages.")
-	}
-
-	index := map[int]int{}
-	for i, a := range m.Apps {
-		index[a.ID] = i
-	}
+	index := map[int]int{} // filled once the rows are in their order
 	// What is going on, for the heartbeat line in the log: if the program ever dies, the last such line says what it was doing
 	var cur atomic.Value
 	cur.Store("starting")
@@ -220,14 +199,53 @@ func main() {
 			}
 		}}
 
+	// Apps that are already up to date go first and are not counted in the heading ("Installing 2 apps"): one pass that touches nothing decides it
+	var current []manifest.App
+	var rest []manifest.App
+	for _, a := range m.Apps {
+		if r.Current(ctx, a) {
+			current = append(current, a)
+		} else {
+			rest = append(rest, a)
+		}
+	}
+	m.Apps = append(current, rest...)
+	nCurrent := len(current)
+	names := make([]string, len(m.Apps))
+	for i, a := range m.Apps {
+		names[i] = ui.Sanitize(a.Name)
+	}
+	win.Hold() // "Preparing" until the up-to-date rows are settled (Release below)
+	win.SetApps(names)
+	for i, a := range m.Apps {
+		k, icon := a.EffectiveMode(), ui.SafeIcon(a.Icon)
+		win.Mutate(i, func(r *ui.Row) {
+			r.Icon = icon
+			if k == manifest.ModePortable || k == manifest.ModeZip || k == manifest.ModeInteractive {
+				r.Kind = k
+			}
+		})
+	}
+	if len(m.Apps) == 0 {
+		win.Note("None of the apps in this list can be installed unattended. Get them from their Fileion pages.")
+	}
+
+	for i, a := range m.Apps {
+		index[a.ID] = i
+	}
+
 	results := make([]run.Result, len(m.Apps))
+	for i := 0; i < nCurrent; i++ { // the rows already up to date are settled first, so the heading counts only what will run
+		results[i] = r.RunAppAhead(ctx, m.Apps[i], nil)
+	}
+	win.Release()
 	runRows := func(only func(run.Result) bool) {
 		// the next apps download while the current one installs; installs stay one at a time, in order
 		ahead := r.NewAhead(ctx, m.Apps)
 		defer ahead.Close()
 		want := func(j int) bool { return only == nil || only(results[j]) }
 		for i, a := range m.Apps {
-			if only != nil && !only(results[i]) {
+			if (only != nil && !only(results[i])) || (only == nil && i < nCurrent) {
 				continue
 			}
 			if win.Stopping() {

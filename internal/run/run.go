@@ -136,6 +136,13 @@ func (r *Runner) logf(a manifest.App, format string, args ...any) {
 	}
 }
 
+// Current says whether the app would be skipped as already up to date (nothing is touched). A portable or zip app whose saved folder is gone is not current:
+// the portable list only finds an app while its folder exists, so it is downloaded again.
+func (r *Runner) Current(ctx context.Context, a manifest.App) bool {
+	res, done := r.pre(ctx, a)
+	return done && res.Status == UpToDate
+}
+
 // pre decides, without touching anything, whether the app ends before any download: stopped, a Flatpak, not understood, already current or not something
 // this program can run. done=false means it needs the download and the install.
 func (r *Runner) pre(ctx context.Context, a manifest.App) (res Result, done bool) {
@@ -152,7 +159,7 @@ func (r *Runner) pre(ctx context.Context, a manifest.App) (res Result, done bool
 	kind := strings.ToLower(a.InstallerType)
 	if mode == manifest.ModePortable || mode == manifest.ModeZip {
 		if v, folder, found := r.portableAt(a); found && AtLeast(v, a.MinVersion) {
-			return Result{Status: UpToDate, Message: "Already at " + v + " in " + folder}, true
+			return Result{Status: UpToDate, Message: "Saved in " + folder}, true
 		}
 	} else if v, found := r.Installed(a); found && AtLeast(v, a.MinVersion) {
 		return Result{Status: UpToDate, Message: "Already at " + v}, true
@@ -196,6 +203,11 @@ func (r *Runner) runAppWith(ctx context.Context, a manifest.App, ahead func() Fe
 		if ahead != nil { // its download was started and is no longer wanted
 			if f := ahead(); f.File != "" {
 				os.Remove(f.File)
+			}
+		}
+		if res.Status == UpToDate && r.Placed != nil && r.Portable != nil { // a portable app or zip skipped because it is already saved keeps its Run, Add to Start menu and Move
+			if e, ok := r.Portable.Find(a.WingetID); ok && (a.EffectiveMode() == manifest.ModePortable || a.EffectiveMode() == manifest.ModeZip) {
+				r.Placed(a, e.Folder, e.Exe)
 			}
 		}
 		return res

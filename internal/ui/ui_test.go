@@ -203,11 +203,16 @@ func TestTheWindowIconsAreTheExeIconAndTheManifestNamesThem(t *testing.T) {
 func TestThePageHasTheProgressAndStoppedStatesAndNoSignPath(t *testing.T) {
 	for _, want := range []string{
 		"The installer stopped", "logPath", "Copy path", // the server-gone state shows the real log path
-		"Installing…", "of '+n", "No data for 2 minutes", "Still running", // elapsed time, overall count, the slow notes
+		"Installing…", "of '+n2", "All up to date", "SHA-256 checked before each app runs", "Sends one anonymous count", "No data for 2 minutes", "Still running", // elapsed time, overall count, the slow notes
 		"prefers-reduced-motion", "role','progressbar", "open-log",
 	} {
 		if !strings.Contains(string(page), want) {
 			t.Errorf("page.html lacks %q", want)
+		}
+	}
+	for _, gone := range []string{"SmartScreen", "Unsigned for now", "Checked against the vendor"} { // the footer is one line; SmartScreen stays on /setup
+		if strings.Contains(string(page), gone) {
+			t.Errorf("page.html still has %q", gone)
 		}
 	}
 	for _, bad := range []string{"SignPath", "signpath", "virus-free"} {
@@ -467,5 +472,21 @@ func TestOnlyHttpsAddressesGoToTheDefaultBrowserAndOnlyByPost(t *testing.T) {
 	case u := <-got:
 		t.Fatalf("opened %s", u)
 	default:
+	}
+}
+
+func TestHoldKeepsPreparingUntilReleaseSoTheCountIsNeverDrawnTwice(t *testing.T) {
+	s, _, err := New(t.TempDir()+"/log", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Hold()
+	s.SetApps([]string{"A", "B"})
+	if !s.state.Preparing {
+		t.Fatal("must stay on Preparing while the up-to-date rows are settled")
+	}
+	s.Release()
+	if s.state.Preparing || len(s.state.Rows) != 2 {
+		t.Fatal("Release shows the list")
 	}
 }

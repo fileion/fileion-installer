@@ -110,3 +110,55 @@ func TestBrokenJsonPreferencesIsRefusedAndLeftByteForByte(t *testing.T) {
 		t.Fatalf("the file was changed: %q", b)
 	}
 }
+
+// The window is 420 x 260 DIPs (the start screen) or 720 x 330 (the list). At each scale the monitor is the same logical screen (1920 x 1080 DIPs) in real
+// pixels, the taskbar takes 40 DIPs at the bottom: the margins left/right and top/bottom must come out equal (to one pixel) in real pixels.
+func TestCentredAtEveryScale(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		dpi  int
+	}{{"100%", 96}, {"125%", 120}, {"150%", 144}, {"175%", 168}, {"200%", 192}} {
+		for _, win := range [][2]int{{420, 260}, {720, 330}} {
+			W, H, bar := ScalePx(1920, c.dpi), ScalePx(1080, c.dpi), ScalePx(40, c.dpi)
+			w, h := ScalePx(win[0], c.dpi), ScalePx(win[1], c.dpi)
+			x, y := Centre(0, 0, W, H-bar, w, h)
+			l, r, tp, b := x, W-x-w, y, H-bar-y-h
+			if abs(l-r) > 1 || abs(tp-b) > 1 || l < 0 || tp < 0 {
+				t.Errorf("%s %dx%d DIPs = %dx%d px: margins l=%d r=%d t=%d b=%d", c.name, win[0], win[1], w, h, l, r, tp, b)
+			}
+			// not the top-left: DIPs used as pixels would put the window at this x on a PC at 150% or 200%
+			if c.dpi > 96 && x == Centre2(ScalePx(1920, 96), win[0]) {
+				t.Errorf("%s: centred as if pixels were DIPs", c.name)
+			}
+		}
+		// a second monitor at the right: the work area starts at x=W
+		W := ScalePx(1920, c.dpi)
+		x, _ := Centre(W, 0, 2*W, ScalePx(1040, c.dpi), ScalePx(420, c.dpi), ScalePx(260, c.dpi))
+		if x < W || x+ScalePx(420, c.dpi) > 2*W {
+			t.Errorf("%s: window not inside the second monitor (x=%d)", c.name, x)
+		}
+	}
+}
+
+func Centre2(workW, wDIP int) int { return (workW - wDIP) / 2 }
+
+func abs(n int) int {
+	if n < 0 {
+		return -n
+	}
+	return n
+}
+
+func TestScalePxAndWhoMovedIt(t *testing.T) {
+	for dpi, want := range map[int]int{96: 420, 144: 630, 192: 840} {
+		if got := ScalePx(420, dpi); got != want {
+			t.Errorf("420 DIPs at %d dpi = %d, want %d", dpi, got, want)
+		}
+	}
+	if PersonMoved(1, -2, 96) || PersonMoved(3, 3, 144) || PersonMoved(0, 0, 192) {
+		t.Error("rounding nudges are not the person")
+	}
+	if !PersonMoved(40, 0, 96) || !PersonMoved(0, -30, 144) || !PersonMoved(17, 0, 192) {
+		t.Error("a real move is the person's")
+	}
+}
