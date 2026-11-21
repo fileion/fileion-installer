@@ -344,6 +344,9 @@ func (s *Server) Stop() {
 	once.Do(func() { close(stopCh) })
 }
 
+// StopChan is closed when Stop is chosen (a new one after a retry).
+func (s *Server) StopChan() <-chan struct{} { s.mu.Lock(); defer s.mu.Unlock(); return s.stopCh }
+
 // Polled says whether the window has asked for the state at least once.
 func (s *Server) Polled() bool { s.mu.Lock(); defer s.mu.Unlock(); return s.polled }
 

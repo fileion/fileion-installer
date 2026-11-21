@@ -99,13 +99,14 @@ function bar(cls,pct,name){const b=el('span','bar '+cls);b.setAttribute('role','
 function openLog(e){if(state&&state.finished){e.preventDefault();fetch('open-log',{method:'POST'}).then(r=>{if(!r.ok)window.open('log','_blank')}).catch(()=>window.open('log','_blank'))}}
 $('log').onclick=openLog;
 
-// ---- the window fits its content: 720 wide (never under 600), 330 high at least, up to 80% of the free screen height; it only grows
-const MINW=600,MINH=330;
+// ---- the window fits its content: the first layout sets exactly 720 wide and the fitted height (330 at least, up to 80% of the free screen height), shrinking if the window came up bigger; after that it only grows
+const MINW=600,MINH=330;let sized=false;
 function fit(){
  try{
   const chrome=outerHeight-innerHeight,want=$('top').offsetHeight+$('list').scrollHeight+($('stopbox').hidden?0:$('stopbox').offsetHeight)+$('dock').offsetHeight+chrome+4;
-  const cap=Math.floor(screen.availHeight*0.8),h=Math.max(outerHeight,MINH,Math.min(cap,want));
-  const w=outerWidth<MINW?720:outerWidth;
+  const cap=Math.floor(screen.availHeight*0.8),fitted=Math.max(MINH,Math.min(cap,want));
+  if(!sized){sized=true;if(outerWidth!==720||outerHeight!==fitted)resizeTo(720,fitted);return}
+  const h=Math.max(outerHeight,fitted),w=outerWidth<MINW?720:outerWidth;
   if(h>outerHeight||w!==outerWidth)resizeTo(w,h);
  }catch(e){}
 }
@@ -217,7 +218,7 @@ function render(){
   ov.className='overall'+(s.finished?(s.bad==0?' ok':' skip'):'');
  }
  const done=s.finished||lost;
- $('close').textContent=done?'Close':'Cancel';$('close').className=done?'primary':'';
+ $('close').textContent=done?'Close':'Cancel';$('close').className=done?'primary':'';$('close').disabled=!done&&!!s.stopping; // Stop is already chosen: the last setup is finishing
  $('share').hidden=!s.finished||lost;$('report').hidden=!s.finished||lost;$('logfolder').hidden=!s.finished||lost;
  $('retry').hidden=!(s.finished&&s.bad>0)||lost;
  if(s.finished||lost){$('confirm').hidden=true;$('close').hidden=false}

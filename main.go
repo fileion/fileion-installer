@@ -189,7 +189,7 @@ func main() {
 	win.RowAction = pf.rowAction(win)
 	r := &run.Runner{Client: client, TempDir: os.TempDir(), Installed: sys.Installed, Exec: sys.Exec,
 		AppTimeout: *appTimeout, Log: logger.Printf,
-		Portable: pf.store, AppsDir: pf.appsDir, ExecJob: sys.ExecJob, Front: sys.FrontWindow, Stopped: win.Stopping,
+		Portable: pf.store, AppsDir: pf.appsDir, ExecJob: sys.ExecJob, Front: sys.FrontWindow, Stopped: win.Stopping, StopCh: win.StopChan,
 		Arm:      func(a manifest.App) <-chan struct{} { return win.Arm(index[a.ID]) },
 		Ask:      func(ctx context.Context, a manifest.App) string { return win.Ask(ctx, index[a.ID]) },
 		Placed:   func(a manifest.App, folder, exe string) { pf.placed(win, index[a.ID], a, folder, exe) },
