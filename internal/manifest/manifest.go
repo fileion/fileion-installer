@@ -26,10 +26,14 @@ type App struct {
 	InstallerType string `json:"installer_type"`
 	Architecture  string `json:"architecture"`
 	SilentSwitch  string `json:"silent_switch"`
-	ProductCode   string `json:"product_code"`
-	WingetID      string `json:"winget_id"`
-	FlatpakID     string `json:"flatpak_id"`
-	Page          string `json:"page"` // the app's Fileion download page
+	// Mode is how Fileion says the app is handled: silent, portable, zip or interactive ("a few clicks"). Empty from a server that does not send it yet.
+	Mode string `json:"mode"`
+	// ZipExe is the program inside a zip (a relative path), when Fileion knows it.
+	ZipExe      string `json:"zip_exe"`
+	ProductCode string `json:"product_code"`
+	WingetID    string `json:"winget_id"`
+	FlatpakID   string `json:"flatpak_id"`
+	Page        string `json:"page"` // the app's Fileion download page
 	// Match finds an installed copy when its Uninstall key name changes with every release: DisplayName starts with Name and Publisher is
 	// equal. Both are always set when the manifest sends it.
 	Match *Match `json:"match,omitempty"`
@@ -39,6 +43,44 @@ type App struct {
 type Match struct {
 	Name      string `json:"name"`
 	Publisher string `json:"publisher"`
+}
+
+// Modes this program can run. An entry with any other mode is not run (a newer Fileion may add modes an older installer must not guess at).
+const (
+	ModeSilent      = "silent"
+	ModePortable    = "portable"
+	ModeZip         = "zip"
+	ModeInteractive = "interactive"
+)
+
+// EffectiveMode is the app's mode; an entry with none (an older server) is silent, as before.
+func (a App) EffectiveMode() string {
+	if a.Mode == "" {
+		return ModeSilent
+	}
+	return a.Mode
+}
+
+// KnownMode says whether this program can run the app's mode.
+func (a App) KnownMode() bool {
+	switch a.EffectiveMode() {
+	case ModeSilent, ModePortable, ModeZip, ModeInteractive:
+		return true
+	}
+	return false
+}
+
+// OrderForRun puts the apps that need the person last (interactive), so the unattended ones finish on their own first; the order inside each group is kept.
+func OrderForRun(apps []App) []App {
+	out := make([]App, 0, len(apps))
+	for _, last := range []bool{false, true} {
+		for _, a := range apps {
+			if (a.EffectiveMode() == ModeInteractive) == last {
+				out = append(out, a)
+			}
+		}
+	}
+	return out
 }
 
 // Manifest is the answer of /setup/manifest/{code}.
