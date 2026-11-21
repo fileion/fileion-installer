@@ -260,6 +260,7 @@ var (
 	showWindow        = user32.NewProc("ShowWindow")
 	setForeground     = user32.NewProc("SetForegroundWindow")
 	flashWindowEx     = user32.NewProc("FlashWindowEx")
+	ntResumeProcess   = syscall.NewLazyDLL("ntdll.dll").NewProc("NtResumeProcess")
 	windowTitlePrefix = "Fileion Installer"
 )
 
@@ -298,25 +299,30 @@ func UserDirs() (downloads, programs, localAppData string) {
 // ExecJob runs a program inside a job object and waits until the program and everything it started have ended, so a setup that starts the real
 // setup and exits is still waited for. When ctx ends the whole job is ended. The program's own windows are shown.
 func ExecJob(ctx context.Context, name string, args []string) error {
-	cmd := exec.Command(name, args...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000}
 	job, _, _ := createJobObject.Call(0, 0)
 	if job == 0 {
 		return Exec(ctx, name, args)
 	}
 	defer syscall.CloseHandle(syscall.Handle(job))
+	// The program starts SUSPENDED, is put in the job, and only then runs: nothing it starts can be outside the job.
+	cmd := exec.Command(name, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000 | 0x00000004} // CREATE_NO_WINDOW | CREATE_SUSPENDED
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	// shortcut: a child the program starts in the instant before it is assigned to the job is not in it; assigning it suspended would need CreateProcess by hand, do that if it is ever seen
-	h, err := syscall.OpenProcess(0x0100|0x0001, false, uint32(cmd.Process.Pid)) // PROCESS_SET_QUOTA | PROCESS_TERMINATE
-	if err == nil {
-		defer syscall.CloseHandle(h)
+	h, err := syscall.OpenProcess(0x0800|0x0100|0x0001, false, uint32(cmd.Process.Pid)) // SUSPEND_RESUME | SET_QUOTA | TERMINATE
+	if err != nil {                                                                     // cannot manage it: end this one and run it plainly
+		cmd.Process.Kill()
+		cmd.Wait()
+		return Exec(ctx, name, args)
 	}
-	if err != nil {
-		return waitTree(ctx, cmd)
-	}
+	defer syscall.CloseHandle(h)
+	inJob := true
 	if r, _, _ := assignToJob.Call(job, uintptr(h)); r == 0 {
+		inJob = false
+	}
+	ntResumeProcess.Call(uintptr(h))
+	if !inJob {
 		return waitTree(ctx, cmd)
 	}
 	waited := make(chan error, 1)
@@ -335,7 +341,7 @@ func ExecJob(ctx context.Context, name string, args []string) error {
 			return ctx.Err()
 		case <-tick.C:
 		}
-		if jobActive(job) == 0 && (haveMain || waited == nil) {
+		if haveMain && jobActive(job) == 0 {
 			return main
 		}
 	}

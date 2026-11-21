@@ -3,16 +3,43 @@
 //	fakeapp /S /CODE={id} /VERSION=1.0   writes an Uninstall registry entry, like a real silent install
 //	fakeapp /S /CODE={id} /NAME=text /PUBLISHER=text /VERSION=2.0   the same with its own DisplayName and Publisher
 //	fakeapp /HANG                        never returns, like an installer waiting on a hidden window
+//
+// An "a few clicks" app is started with no switch at all, so what it does comes from the NAME of the copy of this file (the test server serves copies):
+//
+//	int-ok.exe     like a vendor setup that starts the real setup and exits at once: the child waits for the marker file C:\ftest\marker-ok (the person
+//	               finishing) and then writes the Uninstall entry {FILEION-INT-OK}
+//	int-closed.exe exits at once without installing (the person closed the setup window)
+//	int-hang.exe   never returns
 package main
 
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
 
 func main() {
+	switch exe := strings.ToLower(filepath.Base(os.Args[0])); {
+	case strings.HasPrefix(exe, "int-closed"):
+		return
+	case strings.HasPrefix(exe, "int-hang"):
+		time.Sleep(time.Hour)
+	case strings.HasPrefix(exe, "int-ok"):
+		if len(os.Args) > 1 && os.Args[1] == "/CHILD" {
+			for { // the person finishing the setup: the harness creates the marker
+				if _, err := os.Stat(`C:\ftest\marker-ok`); err == nil {
+					break
+				}
+				time.Sleep(200 * time.Millisecond)
+			}
+			os.Args = []string{os.Args[0], "/S", "/CODE={FILEION-INT-OK}", "/VERSION=1.0"}
+			break
+		}
+		exec.Command(os.Args[0], "/CHILD").Start() // the real setup, started by the first one, which now ends
+		return
+	}
 	code, version, name, publisher := "{FILEION-TEST-0000}", "1.0", "", ""
 	for _, a := range os.Args[1:] {
 		switch {

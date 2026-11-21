@@ -109,7 +109,7 @@ func main() {
 	}
 
 	// Windows: one permission prompt, so every app installs for everyone and none asks again
-	if needAdmin && !elevated {
+	if needAdmin && !elevated && os.Getenv("FILEION_INSTALLER_ELEVATED") != "1" { // the test harness sets it to see the "rights are needed" message without a prompt
 		os.Exit(elevateAndWait(logger, win, *noWindow, logPath, os.Args[1:]))
 	}
 
