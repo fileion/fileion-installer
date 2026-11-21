@@ -85,6 +85,8 @@ type Runner struct {
 	ExecJob func(ctx context.Context, name string, args []string, leave <-chan struct{}) error
 	// Stopped says whether the person chose Stop (so a closed setup is "Stopped", not "Skipped by you"); may be nil.
 	Stopped func() bool
+	// StopCh is closed when the person chooses Stop: a download in progress ends at once and its row says "Not run". A setup already running is not touched. May be nil.
+	StopCh func() <-chan struct{}
 	// Front brings the window to the front and flashes its taskbar button, when it is the person's turn (may be nil).
 	Front func()
 	// Arm returns a channel that is closed when the person presses Skip (or Stop) for this app; nil = never.
@@ -148,10 +150,25 @@ func (r *Runner) runApp(ctx context.Context, a manifest.App) Result {
 	}
 
 	r.say(a, Downloading, "Downloading from the vendor", "")
-	file, sum, got, err := r.download(ctx, a)
+	dlCtx, endDl := context.WithCancel(ctx) // Stop ends the download, never a setup that is already running
+	if r.StopCh != nil {
+		stop := r.StopCh()
+		go func() {
+			select {
+			case <-stop:
+				endDl()
+			case <-dlCtx.Done():
+			}
+		}()
+	}
+	file, sum, got, err := r.download(dlCtx, a)
+	endDl()
 	if err != nil {
 		if ctx.Err() != nil {
 			return Result{Status: Cancelled, Message: "Stopped"}
+		}
+		if r.Stopped != nil && r.Stopped() {
+			return Result{Status: NotRun, Message: "Not run"}
 		}
 		return Result{Status: Failed, Message: "Download failed: " + err.Error()}
 	}
@@ -165,6 +182,9 @@ func (r *Runner) runApp(ctx context.Context, a manifest.App) Result {
 		return Result{Status: Mismatch, Message: "Skipped: the file does not match the vendor's SHA-256, so it was not run"}
 	}
 
+	if r.Stopped != nil && r.Stopped() { // chosen while the hash was being checked: nothing has started yet
+		return Result{Status: NotRun, Message: "Not run"}
+	}
 	switch mode {
 	case manifest.ModePortable:
 		return r.placePortable(a, file)

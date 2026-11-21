@@ -26,7 +26,7 @@ var page []byte
 //go:embed icon-32.png icon-64.png icon-192.png icon-512.png
 var icons embed.FS
 
-const manifestJSON = `{"name":"Fileion Installer","short_name":"Fileion Installer","start_url":"./","display":"standalone","background_color":"#ffffff","theme_color":"#2563eb",` +
+const manifestJSON = `{"name":"Fileion Installer","short_name":"Fileion Installer","start_url":"./","display":"standalone","background_color":"#ffffff","theme_color":"#ffffff",` +
 	`"icons":[{"src":"icon-192.png","sizes":"192x192","type":"image/png"},{"src":"icon-512.png","sizes":"512x512","type":"image/png"}]}`
 
 // Row is one app in the list.
@@ -42,6 +42,7 @@ type Row struct {
 	Folder  string `json:"folder,omitempty"` // where a portable app or a zip is (the full path)
 	CanRun  bool   `json:"canRun,omitempty"` // a program to Run is known (a portable app, or a zip whose program is known)
 	InStart bool   `json:"inStart,omitempty"`
+	Icon    string `json:"icon,omitempty"` // the app's logo on a fileion.com address (see SafeIcon); the page draws nothing when it is empty or fails to load
 }
 
 // State is what the page polls.
@@ -107,6 +108,7 @@ func New(logPath string, admin bool) (*Server, string, error) {
 	mux.HandleFunc(base+"state", s.guard(s.getState))
 	mux.HandleFunc(base+"log", s.guard(s.log))
 	mux.HandleFunc(base+"close", s.guard(s.close))
+	mux.HandleFunc(base+"fit", s.guard(s.fit))
 	mux.HandleFunc(base+"report", s.guard(s.report))
 	mux.HandleFunc(base+"open-log", s.guard(s.openLog))
 	mux.HandleFunc(base+"open-log-folder", s.guard(s.post(func() {
@@ -163,7 +165,7 @@ func (s *Server) index(base string) http.HandlerFunc {
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; img-src 'self'; manifest-src 'self'")
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; img-src 'self' https://*.fileion.com; manifest-src 'self'")
 		w.Write(page)
 	}
 }
@@ -335,6 +337,11 @@ func (s *Server) Ask(ctx context.Context, i int) string {
 func (s *Server) Stop() {
 	s.mu.Lock()
 	s.state.Stopping = true
+	for i := range s.state.Rows { // every app not yet started is "Not run" at once
+		if r := &s.state.Rows[i]; r.Status == "queued" {
+			r.Status, r.Message, r.Since = "notrun", "Not run", time.Now().UnixMilli()
+		}
+	}
 	for i, c := range s.armed {
 		close(c)
 		delete(s.armed, i)
@@ -343,6 +350,9 @@ func (s *Server) Stop() {
 	s.mu.Unlock()
 	once.Do(func() { close(stopCh) })
 }
+
+// StopChan is closed when Stop is chosen (a new one after a retry).
+func (s *Server) StopChan() <-chan struct{} { s.mu.Lock(); defer s.mu.Unlock(); return s.stopCh }
 
 // Polled says whether the window has asked for the state at least once.
 func (s *Server) Polled() bool { s.mu.Lock(); defer s.mu.Unlock(); return s.polled }
@@ -475,4 +485,33 @@ func safeLink(l string) string {
 		return l
 	}
 	return ""
+}
+
+// SafeIcon returns the manifest's icon address when it is https on fileion.com or a subdomain of it, else "": the window never loads an image from anywhere else.
+func SafeIcon(raw string) string {
+	u, err := neturl.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Scheme != "https" || u.User != nil || len(raw) > 600 {
+		return ""
+	}
+	if h := strings.ToLower(u.Hostname()); h != "fileion.com" && !strings.HasSuffix(h, ".fileion.com") {
+		return ""
+	}
+	return u.String()
+}
+
+// fit writes one line to the log for each window-size correction the page makes (what it measured and what it asked for), so a window that is the wrong size can be explained.
+func (s *Server) fit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "use POST", http.StatusMethodNotAllowed)
+		return
+	}
+	line := "window fit:"
+	for _, k := range []string{"key", "tries", "outer", "inner", "content", "top", "list", "dock", "scroll", "screen", "to"} {
+		line += " " + k + "=" + Sanitize(r.URL.Query().Get(k))
+	}
+	if f, err := os.OpenFile(s.LogPath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o600); err == nil {
+		f.WriteString(time.Now().Format("2006/01/02 15:04:05") + " " + line + "\n")
+		f.Close()
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

@@ -462,6 +462,106 @@ jobs:
           "v0.3.0 cases: ${{ steps.v030.outcome }}, old cases: ${{ steps.old.outcome }}" | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           exit 1
 
+  window:
+    # the owner's third "window too tall" report: Edge restored the size it saved from older runs. v0.2.0 runs first and its window is made big and closed (so Edge
+    # saves it); then this build must come up at about 720 x its fitted height. A fixed row of one app gives a fitted height of 330 (the minimum).
+    if: inputs.release_tag == '' && inputs.set_code == ''
+    runs-on: windows-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@3041bf56c941b39c61721a86cd11f3bb1338122a # v5.2.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Window size after an old run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory -Force C:\ftest\www\setup\manifest, C:\ftest\out | Out-Null
+          go build -o C:\ftest\www\fakeapp.exe ./tools/fakeapp
+          go build -o C:\ftest\testserver.exe ./tools/testserver
+          go build -ldflags='-H=windowsgui' -o C:\ftest\new.exe .
+          gh release download v0.2.0 --repo ${{ github.repository }} --pattern 'Fileion-Installer.exe' --dir C:\ftest\rel
+          Copy-Item C:\ftest\rel\Fileion-Installer.exe C:\ftest\old.exe
+          & "$env:ProgramFiles\Git\usr\bin\openssl.exe" req -x509 -newkey rsa:2048 -nodes -keyout C:\ftest\key.pem -out C:\ftest\cert.pem -days 1 -subj "/CN=localhost" -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" 2>$null
+          certutil -addstore -f Root C:\ftest\cert.pem | Out-Null
+          $sha = (Get-FileHash C:\ftest\www\fakeapp.exe -Algorithm SHA256).Hash.ToLower()
+          $a = @{ id = 3; name = 'Test Hang'; version = '1.0'; min_version = '1.0'; url = 'https://127.0.0.1:8443/fakeapp.exe'; sha256 = $sha; installer_type = 'exe'; architecture = 'x64'
+                  silent_switch = '/HANG'; product_code = '{FILEION-TEST-3}'; winget_id = 'Test.3'; page = 'https://software.fileion.com/test-3' }
+          @{ code = 'cccc3333'; os = 'windows'; apps = @($a) } | ConvertTo-Json -Depth 5 | Set-Content C:\ftest\www\setup\manifest\cccc3333 -Encoding utf8
+          $b = $a.Clone(); $b.id = 1; $b.name = 'Test Install'; $b.silent_switch = '/S /CODE={FILEION-TEST-1}'; $b.product_code = '{FILEION-TEST-1}'; $b.winget_id = 'Test.1'
+          @{ code = 'aaaa1111'; os = 'windows'; apps = @($b) } | ConvertTo-Json -Depth 5 | Set-Content C:\ftest\www\setup\manifest\aaaa1111 -Encoding utf8
+          Start-Process C:\ftest\testserver.exe -ArgumentList '-addr','127.0.0.1:8443','-dir','C:\ftest\www','-cert','C:\ftest\cert.pem','-key','C:\ftest\key.pem' -RedirectStandardError C:\ftest\out\server.log -WindowStyle Hidden
+          Start-Sleep 3
+          Add-Type -AssemblyName System.Drawing
+          Add-Type -TypeDefinition @"
+          using System; using System.Text; using System.Runtime.InteropServices;
+          public class W {
+            public delegate bool CB(IntPtr h, IntPtr l);
+            [DllImport("user32.dll")] static extern bool EnumWindows(CB cb, IntPtr l);
+            [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+            [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+            [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out RECT r);
+            [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr h, IntPtr a, int x, int y, int w, int hh, uint f);
+            [DllImport("user32.dll")] static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
+            [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L, T, R, B; }
+            public static IntPtr Find(string t) { IntPtr f = IntPtr.Zero; EnumWindows((h, l) => { if (IsWindowVisible(h)) { var s = new StringBuilder(256); GetWindowText(h, s, 256); if (s.ToString().StartsWith(t)) { f = h; return false; } } return true; }, IntPtr.Zero); return f; }
+            public static int[] Size(IntPtr h) { RECT r; GetWindowRect(h, out r); return new int[] { r.R - r.L, r.B - r.T }; }
+            public static int[] Rect(IntPtr h) { RECT r; GetWindowRect(h, out r); return new int[] { r.L, r.T, r.R, r.B }; }
+            public static void Big(IntPtr h) { SetWindowPos(h, IntPtr.Zero, 0, 0, 1500, 1000, 0x14); }
+            public static void Close(IntPtr h) { PostMessage(h, 0x10, IntPtr.Zero, IntPtr.Zero); }
+          }
+          "@
+          $rows = @(); $fail = $false
+          function Run-Window($exe, [bool]$big) {
+            $p = Start-Process $exe -ArgumentList '-base','https://127.0.0.1:8443','-code','cccc3333','-no-report' -PassThru
+            $h = [IntPtr]::Zero
+            for ($i = 0; $i -lt 40 -and $h -eq [IntPtr]::Zero; $i++) { Start-Sleep 1; $h = [W]::Find('Fileion Installer') }
+            $size = $null
+            if ($h -ne [IntPtr]::Zero) {
+              Start-Sleep 4   # the page lays itself out and fits the window
+              $size = [W]::Size($h)
+              if ($big) { [W]::Big($h); Start-Sleep 2; [W]::Close($h); Start-Sleep 4 }   # the window closes the way a person closes it: Edge saves its size
+            }
+            taskkill /T /F /PID $p.Id | Out-Null
+            Get-Process msedge -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            Start-Sleep 2
+            $size
+          }
+          $s1 = Run-Window C:\ftest\old.exe $true      # v0.2.0: normal size, then a big window is closed
+          $s2 = Run-Window C:\ftest\old.exe $false     # v0.2.0 again: Edge restores the big one (the reported bug, shown so the check below means something)
+          $s3 = Run-Window C:\ftest\new.exe $false     # this build: its own Edge profile
+          # real-window screenshots of this build (Edge's own frame, the real font): running (an installer that hangs) and finished (one that ends)
+          function Shot($code, $name, $wait) {
+            $p = Start-Process C:\ftest\new.exe -ArgumentList '-base','https://127.0.0.1:8443','-code',$code,'-no-report' -PassThru
+            $h = [IntPtr]::Zero
+            for ($i = 0; $i -lt 40 -and $h -eq [IntPtr]::Zero; $i++) { Start-Sleep 1; $h = [W]::Find('Fileion Installer') }
+            Start-Sleep $wait
+            if ($h -ne [IntPtr]::Zero) {
+              $r = [W]::Rect($h); $bmp = New-Object System.Drawing.Bitmap ($r[2] - $r[0]), ($r[3] - $r[1])
+              $g = [System.Drawing.Graphics]::FromImage($bmp); $g.CopyFromScreen($r[0], $r[1], 0, 0, $bmp.Size); $bmp.Save("C:\ftest\out\$name.png"); $g.Dispose(); $bmp.Dispose()
+            }
+            taskkill /T /F /PID $p.Id | Out-Null
+            Get-Process msedge -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            Start-Sleep 2
+          }
+          Shot 'cccc3333' 'window-running' 8
+          Shot 'aaaa1111' 'window-finished' 14
+          foreach ($f in "$env:TEMP\fileion-installer.log", "$env:RUNNER_TEMP\fileion-installer.log") { if (Test-Path $f) { Copy-Item $f C:\ftest\out\window-installer.log -ErrorAction SilentlyContinue; break } }   # has the 'window fit:' lines
+          "v0.2.0 first run: $($s1 -join ' x '), v0.2.0 after a big window was saved: $($s2 -join ' x '), this build: $($s3 -join ' x ')" | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          if (-not $s3 -or [Math]::Abs($s3[0] - 720) -gt 24 -or $s3[1] -gt 330 -or $s3[1] -lt 200) { Write-Error "window is $($s3 -join ' x '), want about 720 wide and 200 to 330 high (a 1-app list, no empty gap)"; exit 1 }
+      - name: Keep the window screenshots
+        if: always()
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: window-screenshots
+          path: C:\ftest\out\window-*
+          if-no-files-found: warn
+
   wait-detect:
     # the friend-PC bug: Notepad++ and VLC stayed on "Installing" although they were installed. A fresh build runs the real vendor installers
     # (x64, also on the Windows 11 ARM runner, where the x64 exe runs under emulation) and must finish with the app detected, in a sane time.

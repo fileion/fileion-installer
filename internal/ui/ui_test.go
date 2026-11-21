@@ -400,3 +400,38 @@ func TestRedirectParsesTheAddressAndReopenForgetsAStop(t *testing.T) {
 		t.Fatal("not polled after a request for the state")
 	}
 }
+
+func TestStopMakesEveryAppNotYetStartedNotRunAtOnceAndLeavesTheRunningOne(t *testing.T) {
+	s, _, err := New(t.TempDir()+"/log", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SetApps([]string{"A", "B", "C"})
+	s.Update(0, "installing", "Installing", "")
+	s.Stop()
+	if !s.Stopping() {
+		t.Fatal("not stopping")
+	}
+	got := []string{s.state.Rows[0].Status, s.state.Rows[1].Status, s.state.Rows[2].Status}
+	if got[0] != "installing" || got[1] != "notrun" || got[2] != "notrun" {
+		t.Fatalf("rows after Stop: %v", got)
+	}
+}
+
+func TestIconsComeOnlyFromFileionHttps(t *testing.T) {
+	for in, want := range map[string]string{
+		"https://software.fileion.com/curator/a.webp?s=1":                      "https://software.fileion.com/curator/a.webp?s=1",
+		"https://fileion.com/a.png":                                            "https://fileion.com/a.png",
+		"https://fileion.com/storage/software/logos/2026/02/git-icon-logo.svg": "https://fileion.com/storage/software/logos/2026/02/git-icon-logo.svg",
+		"http://software.fileion.com/a.png":                                    "",
+		"https://evilfileion.com/a.png":                                        "",
+		"https://fileion.com.evil.net/a.png":                                   "",
+		"https://u:p@fileion.com/a.png":                                        "",
+		"data:image/png;base64,AAAA":                                           "",
+		"":                                                                     "",
+	} {
+		if got := SafeIcon(in); got != want {
+			t.Errorf("SafeIcon(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

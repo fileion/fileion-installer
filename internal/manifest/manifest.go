@@ -34,6 +34,7 @@ type App struct {
 	WingetID    string `json:"winget_id"`
 	FlatpakID   string `json:"flatpak_id"`
 	Page        string `json:"page"` // the app's Fileion download page
+	Icon        string `json:"icon"` // the app's logo on a fileion.com address (optional; older manifests have none)
 	// Match finds an installed copy when its Uninstall key name changes with every release: DisplayName starts with Name and Publisher is
 	// equal. Both are always set when the manifest sends it.
 	Match *Match `json:"match,omitempty"`

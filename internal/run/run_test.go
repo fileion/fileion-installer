@@ -813,10 +813,11 @@ func TestSkipOrStopAfterTheAppIsInstalledIsDoneAndStopOnAnOpenSetupSaysStopped(t
 	r2 := newRunner(t, srv2, notInstalled, s2)
 	skip2 := make(chan struct{})
 	r2.Arm = func(manifest.App) <-chan struct{} { return skip2 }
-	r2.Stopped = func() bool { return true }
+	var stop2 atomic.Bool
+	r2.Stopped = stop2.Load
 	r2.Progress = func(_ manifest.App, st Status, _ string, _ string) {
 		if st == YourTurn {
-			go func() { time.Sleep(30 * time.Millisecond); close(skip2) }()
+			go func() { time.Sleep(30 * time.Millisecond); stop2.Store(true); close(skip2) }()
 		}
 	}
 	if res := r2.RunApp(context.Background(), interactiveApp(srv2, sum(body))); res.Status != Cancelled || res.Message != "Stopped" {
@@ -841,5 +842,56 @@ func TestAPortableFolderThatIsALinkIsNotWrittenThrough(t *testing.T) {
 	}
 	if left, _ := filepath.Glob(filepath.Join(outside, "*")); len(left) != 0 {
 		t.Fatalf("wrote through the link: %v", left)
+	}
+}
+
+func TestStopEndsADownloadAtOnceAndTheRowIsNotRun(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "1000000")
+		w.Write([]byte("part"))
+		w.(http.Flusher).Flush()
+		select { // a slow vendor: nothing more arrives until the test ends
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	t.Cleanup(func() { close(release); srv.Close() })
+	s := &spy{}
+	r := newRunner(t, srv, notInstalled, s)
+	stop := make(chan struct{})
+	var stopped atomic.Bool
+	r.StopCh = func() <-chan struct{} { return stop }
+	r.Stopped = stopped.Load
+	go func() { time.Sleep(100 * time.Millisecond); stopped.Store(true); close(stop) }()
+	begin := time.Now()
+	res := r.RunApp(context.Background(), app(srv, sum([]byte("x"))))
+	if res.Status != NotRun || len(s.execs) != 0 || time.Since(begin) > 5*time.Second {
+		t.Fatalf("status %s after %s, execs %v; want not run at once and nothing started", res.Status, time.Since(begin), s.execs)
+	}
+}
+
+func TestStopDoesNotEndASetupThatIsAlreadyRunning(t *testing.T) {
+	body := []byte("setup")
+	s := &spy{}
+	srv := server(t, body, s)
+	r := newRunner(t, srv, notInstalled, s)
+	stop := make(chan struct{})
+	var stopped atomic.Bool
+	r.StopCh = func() <-chan struct{} { return stop }
+	r.Stopped = stopped.Load
+	var cutShort atomic.Bool
+	r.Exec = func(ctx context.Context, name string, args []string) error {
+		stopped.Store(true) // the person presses Stop while this setup runs
+		close(stop)
+		select {
+		case <-ctx.Done():
+			cutShort.Store(true)
+		case <-time.After(300 * time.Millisecond):
+		}
+		return nil
+	}
+	if res := r.RunApp(context.Background(), app(srv, sum(body))); res.Status != Done || cutShort.Load() {
+		t.Fatalf("status %s, cut short %v; a running setup must finish and be Done", res.Status, cutShort.Load())
 	}
 }
