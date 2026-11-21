@@ -238,11 +238,13 @@ func OpenFolderSelect(path string) error {
 type rect struct{ left, top, right, bottom int32 }
 
 var (
-	getWindowRect      = user32.NewProc("GetWindowRect")
-	setWindowPos       = user32.NewProc("SetWindowPos")
-	monitorFromWindow  = user32.NewProc("MonitorFromWindow")
-	getMonitorInfoW    = user32.NewProc("GetMonitorInfoW")
-	setProcessDPIAware = user32.NewProc("SetProcessDPIAware")
+	getWindowRect                 = user32.NewProc("GetWindowRect")
+	setWindowPos                  = user32.NewProc("SetWindowPos")
+	monitorFromWindow             = user32.NewProc("MonitorFromWindow")
+	getMonitorInfoW               = user32.NewProc("GetMonitorInfoW")
+	setProcessDPIAware            = user32.NewProc("SetProcessDPIAware")
+	setProcessDpiAwarenessContext = user32.NewProc("SetProcessDpiAwarenessContext")
+	getDpiForWindow               = user32.NewProc("GetDpiForWindow")
 )
 
 // windowHandle finds the installer's Edge window (see FrontWindow).
@@ -270,12 +272,20 @@ func windowHandle() uintptr {
 }
 
 // CenterLoop keeps the window centred on the work area (the screen without the taskbar) of the monitor it is on, until stop is closed. It acts when the
-// window's size changes (it grows from the start screen to the list) and only while the person has not moved it: once its top-left is not where this
-// loop put it, it is left alone. The process is made DPI-aware first, so the window and the work area are in the same (real) pixels. Every move is logged.
+// window's size changes (it grows from the start screen to the list) and whenever the window is not where this loop put it, except that a move of more than
+// MoveTolerance DIPs made after Settle is the person's own, and is left alone for good. A smaller drift, or any move in the first moments after a placement,
+// is Edge itself (it restores its saved placement, rounds DIPs to pixels, reacts to a DPI change), so the window is centred again, at most maxPlacements times.
+// The process is made per-monitor-v2 DPI aware first (system-aware before this was not enough: Edge's window lives in per-monitor pixels, so on a PC at 150% or
+// 200% the rectangle read back was in other units than the one set, and the window stayed near the top-left); the window and the work area are then both in
+// the real pixels of the monitor the window is on. Every placement is logged with the DPI and the margins.
 func CenterLoop(stop <-chan struct{}) {
-	setProcessDPIAware.Call()
+	if r, _, _ := setProcessDpiAwarenessContext.Call(^uintptr(3)); r == 0 { // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 is -4
+		setProcessDPIAware.Call()
+		Log("window position: per-monitor DPI awareness not available, using system awareness")
+	}
 	var lastX, lastY, lastW, lastH int32 = -1 << 30, -1 << 30, 0, 0
-	moved := false
+	var placedAt time.Time
+	placements := 0
 	t := time.NewTicker(300 * time.Millisecond)
 	defer t.Stop()
 	for {
@@ -285,7 +295,7 @@ func CenterLoop(stop <-chan struct{}) {
 		case <-t.C:
 		}
 		hwnd := windowHandle()
-		if hwnd == 0 || moved {
+		if hwnd == 0 {
 			continue
 		}
 		var r rect
@@ -293,13 +303,22 @@ func CenterLoop(stop <-chan struct{}) {
 			continue
 		}
 		w, h := r.right-r.left, r.bottom-r.top
-		if lastW != 0 && (r.left != lastX || r.top != lastY) {
-			moved = true // the person moved it
-			Log("window position: left alone, the person moved it (%d,%d)", r.left, r.top)
-			continue
+		dpi := 96
+		if d, _, _ := getDpiForWindow.Call(hwnd); d != 0 {
+			dpi = int(d)
 		}
-		if w == lastW && h == lastH && lastW != 0 {
-			continue
+		if lastW != 0 {
+			if time.Since(placedAt) > Settle && PersonMoved(int(r.left-lastX), int(r.top-lastY), dpi) {
+				Log("window position: left alone, the person moved it (%d,%d)", r.left, r.top)
+				return
+			}
+			if w == lastW && h == lastH && r.left == lastX && r.top == lastY {
+				continue
+			}
+		}
+		if placements >= maxPlacements {
+			Log("window position: stopped after %d placements, the window keeps moving", placements)
+			return
 		}
 		mon, _, _ := monitorFromWindow.Call(hwnd, 2) // MONITOR_DEFAULTTONEAREST
 		var mi struct {
@@ -313,8 +332,11 @@ func CenterLoop(stop <-chan struct{}) {
 		}
 		x, y := Centre(int(mi.work.left), int(mi.work.top), int(mi.work.right), int(mi.work.bottom), int(w), int(h))
 		setWindowPos.Call(hwnd, 0, uintptr(x), uintptr(y), 0, 0, 0x1|0x4|0x10) // SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE
-		Log("window position: %dx%d centred at %d,%d in work area %d,%d-%d,%d", w, h, x, y, mi.work.left, mi.work.top, mi.work.right, mi.work.bottom)
+		Log("window position: %dx%d centred at %d,%d in work area %d,%d-%d,%d, dpi %d, margins left %d right %d top %d bottom %d", w, h, x, y,
+			mi.work.left, mi.work.top, mi.work.right, mi.work.bottom, dpi, x-int(mi.work.left), int(mi.work.right)-x-int(w), y-int(mi.work.top), int(mi.work.bottom)-y-int(h))
 		lastX, lastY, lastW, lastH = int32(x), int32(y), w, h
+		placedAt = time.Now()
+		placements++
 	}
 }
 

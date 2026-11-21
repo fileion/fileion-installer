@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // Log gets what the window code did (the exact Edge command line, window moves, how a link was opened): a run is checked from the log file.
@@ -89,6 +90,22 @@ func itoa(n int) string {
 		s = string(rune('0'+n%10)) + s
 	}
 	return s
+}
+
+// Settle is how long after a placement a move is still taken to be Edge's own; MoveTolerance (DIPs) is how far a later move must go to be the person's.
+const (
+	Settle        = 2 * time.Second
+	MoveTolerance = 8
+	maxPlacements = 12
+)
+
+// ScalePx is a length in DIPs (96 per inch) in pixels at dpi, rounded: 420 DIPs is 630 px at 150% (144 dpi) and 840 px at 200% (192 dpi).
+func ScalePx(dip, dpi int) int { return (dip*dpi + 48) / 96 }
+
+// PersonMoved says whether a window that is (dx, dy) pixels from where it was put was moved by the person, not nudged by rounding at this dpi.
+func PersonMoved(dx, dy, dpi int) bool {
+	tol := ScalePx(MoveTolerance, dpi)
+	return dx > tol || dx < -tol || dy > tol || dy < -tol
 }
 
 // Centre is the top-left that centres a w x h window on a work area (left, top, right, bottom), kept inside the work area.

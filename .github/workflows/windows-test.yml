@@ -323,7 +323,8 @@ jobs:
           $before = (Select-String -Path C:\ftest\out\server.log -Pattern 'fakeapp' -ErrorAction SilentlyContinue | Measure-Object).Count
           $out = Inst $installer $common; $code2 = $script:LASTEXIT
           $out | Set-Content C:\ftest\out\case2-rerun.txt
-          Check 're-run skips the installed app' ($code2 -eq 0 -and $out -match 'up-to-date') "exit $code2"
+          $after = (Select-String -Path C:\ftest\out\server.log -Pattern 'fakeapp' -ErrorAction SilentlyContinue | Measure-Object).Count
+          Check 're-run skips the installed app: Up to date, nothing downloaded' ($code2 -eq 0 -and $out -match 'up-to-date' -and $after -eq $before) "exit $code2, fakeapp requests before/after: $before/$after"
 
           # 3. wrong SHA-256: it must refuse and install nothing
           $out = Inst $installer ($common + @('-code','bbbb2222')); $code3 = $script:LASTEXIT
@@ -558,7 +559,13 @@ jobs:
           (($wl -split "`n") | Where-Object { $_ -match 'edge args:|edge sign-in:|window position:' }) | ForEach-Object { "log: $_" } | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           if ($wl -notmatch 'edge args:.*--no-first-run.*--disable-sync') { Write-Error "the log has no Edge command line with --no-first-run --disable-sync"; exit 1 }
           if ($wl -match 'edge args:.*--inprivate' -or $wl -notmatch 'edge sign-in: method=profile prefs, wrote') { Write-Error "the sign-in prefs were not seeded, or the window is InPrivate"; exit 1 }
-          if ($wl -notmatch 'window position:.*centred') { Write-Warning "no 'window position: ... centred' line in the log" }
+          # centred: the last placement's margins (real pixels, with the dpi of the runner, 100% there; the unit tests cover 100% to 200%) are equal left/right and top/bottom
+          $pos = @(($wl -split "`n") | Where-Object { $_ -match 'window position:.*centred.*margins' }) | Select-Object -Last 1
+          if (-not $pos) { Write-Warning "no 'window position: ... centred ... margins' line in the log" }
+          elseif ($pos -match 'dpi (\d+), margins left (-?\d+) right (-?\d+) top (-?\d+) bottom (-?\d+)') {
+            "centring at $($Matches[1]) dpi: left $($Matches[2]) right $($Matches[3]) top $($Matches[4]) bottom $($Matches[5])" | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+            if ([Math]::Abs([int]$Matches[2] - [int]$Matches[3]) -gt 2 -or [Math]::Abs([int]$Matches[4] - [int]$Matches[5]) -gt 2) { Write-Error "the window is not centred in its work area: $pos"; exit 1 }
+          }
           "v0.2.0 first run: $($s1 -join ' x '), v0.2.0 after a big window was saved: $($s2 -join ' x '), this build: $($s3 -join ' x ')" | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           if (-not $s3 -or [Math]::Abs($s3[0] - 720) -gt 24 -or $s3[1] -gt 330 -or $s3[1] -lt 200) { Write-Error "window is $($s3 -join ' x '), want about 720 wide and 200 to 330 high (a 1-app list, no empty gap)"; exit 1 }
       - name: Keep the window screenshots

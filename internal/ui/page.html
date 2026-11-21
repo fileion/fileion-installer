@@ -182,7 +182,7 @@ function build(i,r,status){
  R.note=null;
  if(BUSY.has(status)||status==='yourturn'){R.note=el('small','');R.note.hidden=true;d.append(R.note)}
  const acts=el('div','acts');
- if(status==='saved'&&r.folder){
+ if((status==='saved'||status==='up-to-date')&&r.folder){
   if(r.kind==='zip')acts.append(btn('Open folder','Open folder for '+name,'open',i));
   else if(r.canRun)acts.append(btn('Run','Run '+name,'run',i));
   else acts.append(btn('Open folder','Open folder for '+name,'open',i));
@@ -230,7 +230,7 @@ function render(){
  if(pv){$('ptitle').textContent=s.nocode?'No app list':'Preparing…';$('ptext').hidden=!s.nocode;$('ptext').textContent=s.note||'';$('plinks').hidden=!s.nocode;$('pbar').hidden=!!s.nocode;$('pclose').hidden=!s.nocode}
  document.body.classList.toggle('stopped',lost);
  $('stopicon').toggleAttribute('hidden',!lost);$('stopbox').hidden=!(lost&&logPath);$('log').hidden=lost||s.finished;box.disabled=lost;box.title=lost?'The installer is not running':'';
- const fin=rs.filter(r=>FINAL.has(r.status)).length;
+ const fin=rs.filter(r=>FINAL.has(r.status)&&r.status!=='up-to-date').length,nUtd=rs.filter(r=>r.status==='up-to-date').length; // the count leaves out the rows that were already up to date
  const intro=$('intro'),h=$('ht'),ov=$('overall');
  $('nocode').hidden=!s.nocode;
  if(s.nocode){h.textContent='No app list';intro.hidden=false;intro.textContent=s.note;$('count').hidden=true;ov.hidden=true;document.querySelector('footer').hidden=true;$('log').hidden=true;$('list').replaceChildren();$('close').textContent='Close';fit();return}
@@ -248,7 +248,7 @@ function render(){
   intro.textContent=s.note||(s.finished?'':n?'Checked against the vendor’s SHA-256 before it runs':'Reading your list…');
   intro.hidden=!intro.textContent;intro.classList.toggle('chk',!s.note&&!s.finished&&n>0);
   const nr=rs.filter(r=>r.status==='notrun').length;
-  $('count').hidden=!n;$('count').textContent=s.finished?(s.bad||nr?[s.ok+' done',s.bad?s.bad+' failed':'',nr?nr+' not run':''].filter(Boolean).join(', '):s.ok+' of '+n+' done'):fin+' of '+n;
+  $('count').hidden=!(n-nUtd);$('count').textContent=s.finished?(s.bad||nr?[(s.ok-nUtd)+' done',s.bad?s.bad+' failed':'',nr?nr+' not run':''].filter(Boolean).join(', '):(s.ok-nUtd)+' of '+(n-nUtd)+' done'):fin+' of '+(n-nUtd);
   $('hcheck').hidden=!(s.finished&&n);$('hcheck').style.color=s.bad||nr?'var(--skip)':'var(--ok)';
   ov.hidden=!n;ov.setAttribute('aria-valuemax',n);ov.setAttribute('aria-valuenow',fin);ov.firstChild.style.width=(n?fin/n*100:0)+'%';
   ov.className='overall'+(s.finished?(s.bad==0&&nr==0?' ok':' skip'):'');

@@ -198,6 +198,11 @@ func (r *Runner) runAppWith(ctx context.Context, a manifest.App, ahead func() Fe
 				os.Remove(f.File)
 			}
 		}
+		if res.Status == UpToDate && r.Placed != nil && r.Portable != nil { // a portable app or zip skipped because it is already saved keeps its Run, Add to Start menu and Move
+			if e, ok := r.Portable.Find(a.WingetID); ok && (a.EffectiveMode() == manifest.ModePortable || a.EffectiveMode() == manifest.ModeZip) {
+				r.Placed(a, e.Folder, e.Exe)
+			}
+		}
 		return res
 	}
 	if a.FlatpakID != "" {
