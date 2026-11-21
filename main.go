@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -47,7 +48,8 @@ func main() {
 		earlyFailure(nil, nil, osName, *noWindow, "This computer's processor ("+runtime.GOARCH+") is not supported by the Fileion Installer. Use the install command from software.fileion.com/setup instead.")
 		os.Exit(2)
 	}
-	logPath := filepath.Join(os.TempDir(), "fileion-installer.log")
+	_, _, localAppData := userFolders(*userDirs)
+	logPath := newLogPath(localAppData)
 	lf, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	var logOut io.Writer = io.Discard // a GUI program's stderr may be no handle at all
 	if err == nil {
@@ -55,6 +57,7 @@ func main() {
 		logOut = lf
 	}
 	logger := log.New(logOut, "", log.LstdFlags)
+	sys.Log = logger.Printf
 
 	// The list's code: the -code flag, else stamped inside this file by Fileion (so the file can be renamed and copied), else in its name
 	var source string
@@ -73,7 +76,7 @@ func main() {
 	win, url, err := ui.New(logPath, osName == "windows")
 	if err != nil {
 		logger.Printf("could not start the window: %v", err)
-		earlyFailure(logger, nil, osName, *noWindow, "The installer could not start its window: "+err.Error())
+		earlyFailure(logger, nil, osName, *noWindow, "The installer could not start its window (details are in the log)")
 		os.Exit(1)
 	}
 	logger.Printf("window: %s", url)
@@ -82,8 +85,13 @@ func main() {
 			logger.Printf("could not open the log: %v", err)
 		}
 	}
-	win.OpenLogFolder = func() {
-		if err := sys.OpenFolder(filepath.Dir(logPath)); err != nil {
+	win.OpenURL = func(u string) {
+		if err := sys.OpenURL(u); err != nil {
+			logger.Printf("could not open the link %s: %v", u, err)
+		}
+	}
+	win.OpenLogFolder = func() { // the folder with the newest log selected
+		if err := sys.OpenFolderSelect(logPath); err != nil {
 			logger.Printf("could not open the log folder: %v", err)
 		}
 	}
@@ -98,6 +106,7 @@ func main() {
 			logger.Printf("could not open the window: %v", err)
 		} else {
 			windowShown = true
+			go sys.CenterLoop(win.Closed)
 		}
 	}
 	// a failure is told in the window; when no window could be opened it is a message box (Windows) so it is never silent
@@ -150,7 +159,11 @@ func main() {
 	stop()
 	if err != nil {
 		logger.Printf("manifest: %v", err)
-		tell(err.Error())
+		msg := "Fileion could not be reached, so the app list could not load. Check the internet connection and run this file again."
+		if strings.HasPrefix(err.Error(), "Fileion has no list") { // Fileion's own sentence, no Go error text
+			msg = err.Error()
+		}
+		tell(msg)
 		win.Finish(0, 0)
 		waitForClose(win, *noWindow)
 		os.Exit(1)
@@ -209,6 +222,10 @@ func main() {
 
 	results := make([]run.Result, len(m.Apps))
 	runRows := func(only func(run.Result) bool) {
+		// the next apps download while the current one installs; installs stay one at a time, in order
+		ahead := r.NewAhead(ctx, m.Apps)
+		defer ahead.Close()
+		want := func(j int) bool { return only == nil || only(results[j]) }
 		for i, a := range m.Apps {
 			if only != nil && !only(results[i]) {
 				continue
@@ -218,7 +235,8 @@ func main() {
 				win.Update(i, string(run.NotRun), "Not run", "")
 				continue
 			}
-			results[i] = r.RunApp(ctx, a)
+			ahead.Fill(i, want)
+			results[i] = r.RunAppAhead(ctx, a, ahead.Take(i))
 		}
 	}
 	count := func() (ok, bad int) {

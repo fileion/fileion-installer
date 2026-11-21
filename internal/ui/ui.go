@@ -80,6 +80,8 @@ type Server struct {
 	RowAction func(i int, action string)
 	// OpenLogFolder opens the folder of the log file in Explorer.
 	OpenLogFolder func()
+	// OpenURL opens a web address in the person's default browser (set by main); only https addresses ever reach it.
+	OpenURL func(string)
 
 	armed    map[int]chan struct{} // an interactive row's Skip channel
 	ask      map[int]chan string   // Retry or Skip after "Not finished"
@@ -116,6 +118,15 @@ func New(logPath string, admin bool) (*Server, string, error) {
 			s.OpenLogFolder()
 		}
 	})))
+	mux.HandleFunc(base+"open-url", s.guard(func(w http.ResponseWriter, r *http.Request) {
+		u := safeLink(r.URL.Query().Get("u"))
+		if r.Method != http.MethodPost || u == "" || s.OpenURL == nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		go s.OpenURL(u)
+		w.WriteHeader(http.StatusNoContent)
+	}))
 	mux.HandleFunc(base+"stop", s.guard(s.post(s.Stop)))
 	mux.HandleFunc(base+"retry", s.guard(s.post(func() {
 		s.mu.Lock()

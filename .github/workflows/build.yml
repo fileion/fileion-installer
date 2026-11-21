@@ -78,6 +78,8 @@ jobs:
             dist/Fileion-Installer.AppImage
             dist/SHA256SUMS
       - name: A stamped AppImage reads its code (the stamp is appended after the image; $APPIMAGE points at the file)
+        env:
+          FILEION_INSTALLER_LOG_IN_TEMP: '1'
         run: |
           go build -o stamp ./tools/stamp
           ./stamp -code 3fa91c0b dist/Fileion-Installer.AppImage "My special bundle.AppImage"
