@@ -211,6 +211,7 @@ jobs:
             # 17. the hash is checked before a setup window opens
             $bad = Get-Content C:\ftest\www\setup\manifest\iiii4444 -Raw | ConvertFrom-Json; $bad.apps[0].sha256 = ('0' * 64); $bad.code = 'iiii7777'
             $bad | ConvertTo-Json -Depth 5 | Set-Content C:\ftest\www\setup\manifest\iiii7777 -Encoding utf8
+            Kill-Fakes; Remove-Item $modes -ErrorAction SilentlyContinue
             $out = Inst $installer ($common + @('-code','iiii7777')); $c17 = $script:LASTEXIT
             Check 'interactive: a wrong hash is refused before any setup window opens' ($c17 -eq 1 -and -not (Test-Path $modes) -and (Fakes '.*').Count -eq 0 -and $out -match 'mismatch' -and $out -notmatch 'yourturn') "exit $c17"
 
@@ -328,11 +329,13 @@ jobs:
           Check 'wrong SHA-256 is refused' ((-not (Key '{FILEION-TEST-2}')) -and $code3 -eq 1 -and $out -match 'mismatch') "exit $code3, Uninstall key present: $(Key '{FILEION-TEST-2}')"
 
           # 4. a hung installer: stopped at -app-timeout, nothing left running
+          Remove-Item C:\ftest\out\fakeapp-modes.log, C:\ftest\mode.txt -ErrorAction SilentlyContinue
           $sw = [Diagnostics.Stopwatch]::StartNew()
           $out = Inst $installer ($common + @('-code','cccc3333','-app-timeout','20s')); $code4 = $script:LASTEXIT
           $sw.Stop()
           $out | Set-Content C:\ftest\out\case4-hang.txt
-          $left = @(Get-Process -Name fakeapp -ErrorAction SilentlyContinue).Count
+          # the hung fake is a temp file named fileion-*.exe: look for it by the pid it logged
+          $left = @(Get-Content C:\ftest\out\fakeapp-modes.log -ErrorAction SilentlyContinue | ForEach-Object { [int]($_ -replace '.*pid=', '') } | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue }).Count
           Check 'hung installer stops at the time limit' ($out -match 'manual' -and $left -eq 0 -and $sw.Elapsed.TotalSeconds -lt 90) "$([int]$sw.Elapsed.TotalSeconds)s, processes left: $left"
 
           # 5. the count: sent at the end by default, and not at all when "Don't send" is ticked in the window. The window's own tick is POST report?send=0
