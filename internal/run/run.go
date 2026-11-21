@@ -16,9 +16,11 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"fileion-installer/internal/manifest"
+	"fileion-installer/internal/portable"
 	"fileion-installer/internal/version"
 )
 
@@ -37,6 +39,12 @@ const (
 	Failed      Status = "failed"
 	Manual      Status = "manual" // stopped at the time limit: it shows its own setup window or hung
 	Cancelled   Status = "cancelled"
+	Unpacking   Status = "unpacking"   // a zip being unpacked
+	Saved       Status = "saved"       // a portable app or a zip is in its folder
+	YourTurn    Status = "yourturn"    // an interactive app: its own setup window is open and waits for the person
+	NotFinished Status = "notfinished" // the setup window closed and the app is not installed: Retry or Skip
+	Skipped     Status = "skipped"     // the person chose Skip
+	NotRun      Status = "notrun"      // the person stopped the run before this one
 )
 
 // Result is the end state of one app.
@@ -47,7 +55,7 @@ type Result struct {
 }
 
 // OK says whether the app counts as worked in the anonymous count (installed, updated or already current).
-func (r Result) OK() bool { return r.Status == Done || r.Status == UpToDate }
+func (r Result) OK() bool { return r.Status == Done || r.Status == UpToDate || r.Status == Saved }
 
 // Bad says whether it counts as failed (an unsupported kind is neither).
 func (r Result) Bad() bool { return r.Status == Failed || r.Status == Mismatch }
@@ -69,6 +77,22 @@ type Runner struct {
 	Log func(format string, args ...any)
 	// Progress is told about each step (may be nil).
 	Progress func(app manifest.App, s Status, msg string, link string)
+	// Portable keeps the list of portable and zip apps; AppsDir is the folder their own folders go in (Downloads\Fileion Apps).
+	Portable *portable.Store
+	AppsDir  string
+	// ExecJob runs a program and waits until it and everything it started has ended (Windows: a job object). When leave is closed it stops
+	// waiting and returns WITHOUT ending anything (an app the setup launched at its end keeps running). Nil = Exec.
+	ExecJob func(ctx context.Context, name string, args []string, leave <-chan struct{}) error
+	// Stopped says whether the person chose Stop (so a closed setup is "Stopped", not "Skipped by you"); may be nil.
+	Stopped func() bool
+	// Front brings the window to the front and flashes its taskbar button, when it is the person's turn (may be nil).
+	Front func()
+	// Arm returns a channel that is closed when the person presses Skip (or Stop) for this app; nil = never.
+	Arm func(app manifest.App) <-chan struct{}
+	// Ask waits for "retry" or "skip" after an interactive setup closed without the app being installed; nil = skip.
+	Ask func(ctx context.Context, app manifest.App) string
+	// Placed tells where a portable app or a zip ended up (may be nil).
+	Placed func(app manifest.App, folder, exe string)
 	// Transfer is told how many bytes of the download have arrived (total is 0 when the vendor does not say), at most a few times a second (may be nil).
 	Transfer func(app manifest.App, done, total int64)
 }
@@ -92,7 +116,7 @@ func (r *Runner) RunApp(ctx context.Context, a manifest.App) (res Result) {
 		}
 	}()
 	res = r.runApp(ctx, a)
-	if res.Status == Unsupported || res.Status == Manual {
+	if res.Status == Unsupported || res.Status == Manual || res.Status == Failed || res.Status == Mismatch {
 		res.Link = a.Page
 	}
 	r.say(a, res.Status, res.Message, res.Link)
@@ -106,11 +130,20 @@ func (r *Runner) runApp(ctx context.Context, a manifest.App) Result {
 	if a.FlatpakID != "" {
 		return r.runFlatpak(ctx, a)
 	}
-	if v, found := r.Installed(a); found && AtLeast(v, a.MinVersion) {
-		return Result{Status: UpToDate, Message: "Already at " + v}
+	mode := a.EffectiveMode()
+	if !a.KnownMode() {
+		return Result{Status: Unsupported, Message: "Needs a newer Fileion Installer: get it from its Fileion page"}
 	}
 	kind := strings.ToLower(a.InstallerType)
-	if kind == "msix" || kind == "appx" || kind == "msstore" || kind == "zip" || kind == "portable" || strings.TrimSpace(a.SilentSwitch) == "" {
+	if mode == manifest.ModePortable || mode == manifest.ModeZip {
+		if v, folder, found := r.portableAt(a); found && AtLeast(v, a.MinVersion) {
+			return Result{Status: UpToDate, Message: "Already at " + v + " in " + folder}
+		}
+	} else if v, found := r.Installed(a); found && AtLeast(v, a.MinVersion) {
+		return Result{Status: UpToDate, Message: "Already at " + v}
+	}
+	// A kind this program cannot run (a store package), and a "silent" entry with nothing to run it with (the way older servers marked the rest)
+	if kind == "msix" || kind == "appx" || kind == "msstore" || (mode == manifest.ModeSilent && (kind == "zip" || kind == "portable" || strings.TrimSpace(a.SilentSwitch) == "")) {
 		return Result{Status: Unsupported, Message: "Needs its own installer: get it from its Fileion page"}
 	}
 
@@ -132,9 +165,224 @@ func (r *Runner) runApp(ctx context.Context, a manifest.App) Result {
 		return Result{Status: Mismatch, Message: "Skipped: the file does not match the vendor's SHA-256, so it was not run"}
 	}
 
+	switch mode {
+	case manifest.ModePortable:
+		return r.placePortable(a, file)
+	case manifest.ModeZip:
+		return r.unpackZip(a, file)
+	case manifest.ModeInteractive:
+		name, args := command(a, file)
+		return r.runInteractive(ctx, a, name, args)
+	}
 	r.say(a, Installing, "Installing", "")
 	name, args := command(a, file)
 	return r.install(ctx, a, name, args)
+}
+
+// portableAt looks the app up in the list of portable and zip apps kept on this PC.
+func (r *Runner) portableAt(a manifest.App) (version, folder string, found bool) {
+	if r.Portable == nil {
+		return "", "", false
+	}
+	e, ok := r.Portable.Find(a.WingetID)
+	return e.Version, r.shown(e.Folder), ok
+}
+
+// shown is a folder as the window says it: "Downloads\Fileion Apps\Rufus" for the usual place, the whole path elsewhere.
+func (r *Runner) shown(dir string) string {
+	apps := filepath.Clean(r.AppsDir)
+	if r.AppsDir != "" && strings.EqualFold(filepath.Base(filepath.Dir(apps)), "Downloads") && strings.HasPrefix(strings.ToLower(dir), strings.ToLower(apps)) {
+		return filepath.Join(filepath.Base(filepath.Dir(apps)), strings.TrimPrefix(dir, filepath.Dir(apps)+string(filepath.Separator)))
+	}
+	return dir
+}
+
+func (r *Runner) appFolder(a manifest.App) (string, error) {
+	if r.AppsDir == "" {
+		return "", errors.New("no folder for portable apps")
+	}
+	dir := filepath.Join(r.AppsDir, portable.SafeName(a.Name))
+	if err := os.MkdirAll(r.AppsDir, 0o755); err != nil {
+		return "", err
+	}
+	if portable.IsLink(r.AppsDir) || portable.IsLink(dir) { // elevated: never write through a symlink or junction
+		return "", errors.New("it is a link, so nothing was written there")
+	}
+	return dir, os.MkdirAll(dir, 0o755)
+}
+
+func (r *Runner) remember(a manifest.App, dir, exe string) {
+	if r.Portable != nil {
+		if err := r.Portable.Put(portable.Entry{WingetID: a.WingetID, Name: a.Name, Version: strings.TrimSpace(a.Version), Folder: dir, Exe: exe}); err != nil && r.Log != nil {
+			r.Log("%s: the portable list could not be saved: %v", a.Name, err)
+		}
+	}
+	if r.Placed != nil {
+		r.Placed(a, dir, exe)
+	}
+}
+
+// placePortable puts the verified file in the app's own folder (Downloads\Fileion Apps\<App>) and notes it in the list.
+func (r *Runner) placePortable(a manifest.App, file string) Result {
+	dir, err := r.appFolder(a)
+	if err != nil {
+		return Result{Status: Failed, Message: "Could not make the app's folder: " + err.Error()}
+	}
+	name := portable.SafeName(filepath.Base(strings.SplitN(strings.TrimSuffix(strings.SplitN(a.URL, "?", 2)[0], "/download"), "#", 2)[0]))
+	if filepath.Ext(name) == "" {
+		name += ".exe"
+	}
+	target := filepath.Join(dir, name)
+	if portable.IsLink(target) {
+		return Result{Status: Failed, Message: "Could not save the file: its place is a link"}
+	}
+	if err := portable.MoveFile(file, target); err != nil {
+		return Result{Status: Failed, Message: "Could not save the file: " + err.Error()}
+	}
+	r.remember(a, dir, target)
+	return Result{Status: Saved, Message: "Saved in " + r.shown(dir)}
+}
+
+// unpackZip unpacks the verified zip into the app's folder; the zip itself is deleted by the caller.
+func (r *Runner) unpackZip(a manifest.App, file string) Result {
+	dir, err := r.appFolder(a)
+	if err != nil {
+		return Result{Status: Failed, Message: "Could not make the app's folder: " + err.Error()}
+	}
+	r.say(a, Unpacking, "Unpacking…", "")
+	if err := portable.Unzip(file, dir); err != nil {
+		return Result{Status: Failed, Message: "Could not unpack: " + err.Error()}
+	}
+	r.remember(a, dir, portable.FindExe(dir, a.ZipExe))
+	return Result{Status: Saved, Message: "Saved in " + r.shown(dir)}
+}
+
+// runInteractive is an app that has no silent switch ("a few clicks"): its own setup window opens and the person finishes it. The whole process
+// tree is waited for (a setup that starts another program and exits is still waited for), then the registry decides: installed is Done, else
+// "Not finished" and Retry or Skip. Skip (or Stop) ends the setup and moves on, so nothing can hang.
+func (r *Runner) runInteractive(ctx context.Context, a manifest.App, name string, args []string) Result {
+	limit, poll, grace := r.AppTimeout, r.PollEvery, r.Grace
+	if limit < 30*time.Minute { // a person takes their time: at least half an hour
+		limit = 30 * time.Minute
+	}
+	if poll <= 0 {
+		poll = 4 * time.Second
+	}
+	if grace <= 0 {
+		grace = 30 * time.Second
+	}
+	run := func(c context.Context, n string, ar []string, leave <-chan struct{}) error {
+		if r.ExecJob != nil {
+			return r.ExecJob(c, n, ar, leave)
+		}
+		done := make(chan error, 1)
+		go func() { done <- r.Exec(c, n, ar) }()
+		select {
+		case err := <-done:
+			return err
+		case <-leave:
+			return nil
+		}
+	}
+	present := func() (string, bool) {
+		v, found := r.Installed(a)
+		return v, found && AtLeast(v, a.MinVersion)
+	}
+	done := Result{Status: Done, Message: "Installed " + strings.TrimSpace(a.Version)}
+	for {
+		r.say(a, YourTurn, "Your turn: finish "+a.Name+"’s setup window", "")
+		if r.Front != nil {
+			r.Front()
+		}
+		var skip <-chan struct{}
+		if r.Arm != nil {
+			skip = r.Arm(a)
+		}
+		runCtx, end := context.WithTimeout(ctx, limit)
+		var skipped atomic.Bool
+		stop := make(chan struct{})
+		go func() {
+			select {
+			case <-skip:
+				skipped.Store(true)
+				end()
+			case <-stop:
+			}
+		}()
+		leave := make(chan struct{})
+		ended := make(chan error, 1)
+		go func() { ended <- run(runCtx, name, args, leave) }()
+		// While the setup is open the registry is looked at, as for a silent installer: a setup that ends with "Launch the app" leaves the app (and
+		// so the job) running although the app is installed. Once found, the setup gets a short time to end by itself, then it is left alone, not killed.
+		tick := time.NewTicker(poll)
+		var err error
+		left := false
+	wait:
+		for {
+			select {
+			case err = <-ended:
+				break wait
+			case <-tick.C:
+				if v, ok := present(); ok {
+					if r.Log != nil {
+						r.Log("%s: detected as installed at %s while its setup is still open; waiting up to %s for it to end", a.Name, v, grace)
+					}
+					select {
+					case err = <-ended:
+					case <-time.After(grace):
+						close(leave)
+						left = true
+						err = <-ended
+						if r.Log != nil {
+							r.Log("%s: its setup is still open after %s and is left running (not killed): the app is installed", a.Name, grace)
+						}
+					case <-runCtx.Done():
+						err = <-ended
+					}
+					break wait
+				}
+			}
+		}
+		tick.Stop()
+		timedOut := errors.Is(runCtx.Err(), context.DeadlineExceeded)
+		close(stop)
+		end()
+		if r.Log != nil {
+			r.Log("%s: its setup window ended (%v)", a.Name, err)
+		}
+		_, installed := present()
+		switch {
+		case ctx.Err() != nil:
+			return Result{Status: Cancelled, Message: "Stopped"}
+		case installed && left:
+			d := done
+			d.Message += " (its setup is still open: you can close it)"
+			return d
+		case installed:
+			return done // also when Skip or Stop came a moment after the app was installed
+		case skipped.Load():
+			if r.Stopped != nil && r.Stopped() {
+				return Result{Status: Cancelled, Message: "Stopped"}
+			}
+			return Result{Status: Skipped, Message: "Skipped by you"}
+		case timedOut:
+			return Result{Status: Manual, Message: "Skipped: needs manual install"}
+		}
+		r.say(a, NotFinished, "Setup window closed before the app installed", "")
+		answer := "skip"
+		if r.Ask != nil {
+			answer = r.Ask(ctx, a)
+		}
+		if ctx.Err() != nil {
+			return Result{Status: Cancelled, Message: "Stopped"}
+		}
+		if answer != "retry" {
+			if r.Stopped != nil && r.Stopped() {
+				return Result{Status: Cancelled, Message: "Stopped"}
+			}
+			return Result{Status: Skipped, Message: "Skipped by you"}
+		}
+	}
 }
 
 // install runs the vendor installer and watches it. Some installers never return on their own (a finish page, a "close the running app"
@@ -190,6 +438,14 @@ func (r *Runner) install(ctx context.Context, a manifest.App, name string, args 
 		return v, found && AtLeast(v, a.MinVersion)
 	}
 
+	// Ending the installer is not done until its process tree is killed: the kill runs in the Exec goroutine, and the run may exit right after this returns
+	endAndWait := func() {
+		endIt()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+		}
+	}
 	tick, hintT, deadline := time.NewTicker(poll), time.NewTimer(hint), time.NewTimer(limit)
 	defer tick.Stop()
 	defer hintT.Stop()
@@ -218,7 +474,7 @@ func (r *Runner) install(ctx context.Context, a manifest.App, name string, args 
 				logf("its installer is still open after %s and is left running (not killed): the app is installed", elapsed())
 				return Result{Status: Done, Message: "Installed " + strings.TrimSpace(a.Version) + " (its installer is still open: you can close it)"}
 			case <-ctx.Done():
-				endIt()
+				endAndWait()
 				return Result{Status: Cancelled, Message: "Stopped"}
 			}
 		case <-hintT.C:
@@ -226,10 +482,10 @@ func (r *Runner) install(ctx context.Context, a manifest.App, name string, args 
 			r.say(a, Installing, a.Name+"'s installer may be waiting for you: look for its window or in the taskbar", "")
 		case <-deadline.C:
 			logf("time limit of %s reached; ending the installer", limit)
-			endIt()
+			endAndWait()
 			return Result{Status: Manual, Message: "Skipped: needs manual install"}
 		case <-ctx.Done():
-			endIt()
+			endAndWait()
 			return Result{Status: Cancelled, Message: "Stopped"}
 		}
 	}
@@ -268,6 +524,9 @@ func (r *Runner) runFlatpak(ctx context.Context, a manifest.App) Result {
 // command builds the silent run: msi packages go through msiexec, other kinds run with their switch.
 func command(a manifest.App, file string) (string, []string) {
 	switches := strings.Fields(a.SilentSwitch)
+	if a.EffectiveMode() == manifest.ModeInteractive {
+		switches = nil // the vendor's own window: no switch
+	}
 	if kind := strings.ToLower(a.InstallerType); kind == "msi" || kind == "wix" {
 		return "msiexec", append([]string{"/i", file}, switches...)
 	}

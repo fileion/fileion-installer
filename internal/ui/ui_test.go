@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestTheWindowAnswersOnlyToItsOwnHostAndPath(t *testing.T) {
@@ -211,5 +213,190 @@ func TestThePageHasTheProgressAndStoppedStatesAndNoSignPath(t *testing.T) {
 		if strings.Contains(string(page), bad) {
 			t.Errorf("page.html contains %q", bad)
 		}
+	}
+}
+
+// --- v0.3.0 ---
+
+func post(t *testing.T, url string) int {
+	t.Helper()
+	res, err := http.Post(url, "text/plain", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	return res.StatusCode
+}
+
+func TestTheWindowStartsOnPreparingAndMovesToTheListOnlyToALocalAddress(t *testing.T) {
+	s, url, _ := New(t.TempDir()+"/log", true)
+	st := func() State {
+		res, err := http.Get(url + "state")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		var v State
+		json.NewDecoder(res.Body).Decode(&v)
+		return v
+	}
+	if !st().Preparing {
+		t.Fatal("the first screen must be Preparing")
+	}
+	s.Redirect("https://evil.example/")
+	if st().Redirect != "" {
+		t.Fatal("a non-local redirect was accepted")
+	}
+	s.Redirect("http://127.0.0.1:5555/t/abc/")
+	if st().Redirect != "http://127.0.0.1:5555/t/abc/" {
+		t.Fatal("the hand-off address was refused")
+	}
+	s.SetApps([]string{"A"})
+	if st().Preparing {
+		t.Fatal("still Preparing once the list is there")
+	}
+}
+
+func TestSkipRetryAndStopSteerAnInteractiveRow(t *testing.T) {
+	s, url, _ := New(t.TempDir()+"/log", true)
+	s.SetApps([]string{"VLC", "OBS"})
+
+	skip := s.Arm(0)
+	if post(t, url+"row/skip?i=0") != http.StatusNoContent {
+		t.Fatal("skip refused")
+	}
+	select {
+	case <-skip:
+	default:
+		t.Fatal("Skip did not close the row's channel")
+	}
+
+	s.Update(1, "notfinished", "Setup window closed before the app installed", "")
+	go func() { time.Sleep(30 * time.Millisecond); post(t, url+"row/retry?i=1") }()
+	if got := s.Ask(context.Background(), 1); got != "retry" {
+		t.Fatalf("Ask = %q, want retry", got)
+	}
+
+	later := s.Arm(1)
+	post(t, url+"stop")
+	select {
+	case <-later:
+	default:
+		t.Fatal("Stop did not end a waiting row")
+	}
+	if !s.Stopping() {
+		t.Fatal("not stopping")
+	}
+	if got := s.Ask(context.Background(), 1); got != "skip" {
+		t.Fatalf("Ask after Stop = %q", got)
+	}
+	if post(t, url+"row/skip?i=9") != http.StatusBadRequest || post(t, url+"row/fly?i=0") != http.StatusBadRequest {
+		t.Fatal("a bad row or action was accepted")
+	}
+	if res, _ := http.Get(url + "row/skip?i=0"); res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("GET on a row action got %d", res.StatusCode)
+	}
+}
+
+func TestRetryOnlyWorksOnAFinishedRunAndRowButtonsGoToMain(t *testing.T) {
+	s, url, _ := New(t.TempDir()+"/log", true)
+	s.SetApps([]string{"Rufus"})
+	post(t, url+"retry")
+	select {
+	case <-s.Retried():
+		t.Fatal("Retry counted while the run was still going")
+	default:
+	}
+	s.Finish(0, 1)
+	post(t, url+"retry")
+	select {
+	case <-s.Retried():
+	case <-time.After(time.Second):
+		t.Fatal("Retry did not arrive")
+	}
+	got := make(chan string, 1)
+	s.RowAction = func(i int, a string) { got <- fmt.Sprint(i, a) }
+	post(t, url+"row/move?i=0")
+	select {
+	case v := <-got:
+		if v != "0move" {
+			t.Fatalf("got %q", v)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("the row action never ran")
+	}
+	opened := false
+	s.OpenLogFolder = func() { opened = true }
+	post(t, url+"open-log-folder")
+	if !opened {
+		t.Fatal("open-log-folder did nothing")
+	}
+}
+
+func TestThePageHasTheV030Controls(t *testing.T) {
+	s, url, _ := New(t.TempDir()+"/log", false)
+	_ = s
+	res, err := http.Get(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	page := string(b)
+	for _, want := range []string{"Preparing…", "Stop after the current app?", "Keep going", "Retry failed apps", "Share Fileion Installer", "Report a problem", "installer-help#report",
+		"Open log folder", "Untick any extra offers", "A few clicks", "Add to Start menu", "Move…", "Open folder", "Not finished", "Skipped by you", "screen.availHeight", "Verifying SHA-256…", "Not run"} {
+		if !strings.Contains(page, want) {
+			t.Errorf("the page lacks %q", want)
+		}
+	}
+	if strings.Contains(strings.ToLower(page), "signpath") {
+		t.Error("SignPath text in the page")
+	}
+}
+
+func TestRedirectParsesTheAddressAndReopenForgetsAStop(t *testing.T) {
+	s, url, _ := New(t.TempDir()+"/log", true)
+	for _, bad := range []string{"http://127.0.0.1:80@evil.com/t/x/", "http://127.0.0.1.evil.com:80/t/x/", "http://127.0.0.1/t/x/", "http://127.0.0.1:abc/t/x/", "http://127.0.0.1:5000/x/", "https://127.0.0.1:5000/t/x/", "http://user@127.0.0.1:5000/t/x/", "http://localhost:5000/t/x/"} {
+		s.Redirect(bad)
+		s.mu.Lock()
+		got := s.state.Redirect
+		s.mu.Unlock()
+		if got != "" {
+			t.Fatalf("%q was accepted", bad)
+		}
+	}
+	s.Redirect("http://127.0.0.1:5000/t/abc/")
+
+	s.SetApps([]string{"A"})
+	post(t, url+"stop")
+	if !s.Stopping() {
+		t.Fatal("Stop did not stop")
+	}
+	s.Finish(0, 1)
+	s.Reopen()
+	if s.Stopping() {
+		t.Fatal("a Stop before the retry still stops the retry")
+	}
+	s.Update(0, "notfinished", "", "")
+	go func() { time.Sleep(30 * time.Millisecond); post(t, url+"row/retry?i=0") }()
+	if got := s.Ask(context.Background(), 0); got != "retry" {
+		t.Fatalf("after Reopen Ask = %q, want the person's retry", got)
+	}
+	if c := s.Arm(0); func() bool {
+		select {
+		case <-c:
+			return true
+		default:
+			return false
+		}
+	}() {
+		t.Fatal("a row armed after the retry is already stopped")
+	}
+	if s.Polled() {
+		t.Fatal("polled before anyone asked")
+	}
+	http.Get(url + "state")
+	if !s.Polled() {
+		t.Fatal("not polled after a request for the state")
 	}
 }

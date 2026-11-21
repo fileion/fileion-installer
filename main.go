@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -32,12 +33,12 @@ func main() {
 	noWindow := flag.Bool("no-window", false, "print progress instead of opening the window")
 	appTimeout := flag.Duration("app-timeout", run.DefaultTimeout, "stop an installer that runs longer than this and mark it for manual install")
 	noReport := flag.Bool("no-report", false, "do not send the anonymous count at the end")
+	handoff := flag.String("handoff", "", "internal: the file the elevated copy writes its window address to (the first copy's window then moves to it)")
+	userDirs := flag.String("user-dirs", "", "internal: the signed-in person's Downloads, Start menu Programs and LocalAppData folders, joined by |")
 	flag.Parse()
 
 	osName := runtime.GOOS
-	if osName == "windows" {
-		sys.HideOwnConsole() // double-clicked: no black console window behind the Fileion window (from a terminal it stays)
-	}
+	sys.AttachParentConsole() // a Windows GUI program has no console: from a terminal, output goes to that terminal
 	if osName != "windows" && osName != "linux" {
 		fmt.Fprintln(os.Stderr, "Fileion Installer runs on Windows and Linux. On a Mac, use the command from software.fileion.com/setup.")
 		os.Exit(2)
@@ -48,11 +49,12 @@ func main() {
 	}
 	logPath := filepath.Join(os.TempDir(), "fileion-installer.log")
 	lf, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
-		lf = os.Stderr
+	var logOut io.Writer = io.Discard // a GUI program's stderr may be no handle at all
+	if err == nil {
+		defer lf.Close()
+		logOut = lf
 	}
-	defer lf.Close()
-	logger := log.New(lf, "", log.LstdFlags)
+	logger := log.New(logOut, "", log.LstdFlags)
 
 	// The list's code: the -code flag, else stamped inside this file by Fileion (so the file can be renamed and copied), else in its name
 	var source string
@@ -64,18 +66,10 @@ func main() {
 	}
 	logger.Printf("start: version %s, code %s (from the %s), %s", version, *code, source, osName)
 
-	// Windows: one permission prompt up front, so every app installs for everyone and none asks again
+	// The window comes up at once ("Preparing"), before the Windows permission prompt and while the list loads. When elevation is needed the first
+	// copy keeps this window and starts an elevated copy that does the work; the window then moves to the elevated copy's own page.
 	needAdmin := osName == "windows" && !sys.IsAdmin()
-	if needAdmin && os.Getenv("FILEION_INSTALLER_ELEVATED") != "1" {
-		logger.Printf("not an administrator: asking Windows for elevation")
-		os.Setenv("FILEION_INSTALLER_ELEVATED", "1")
-		err := sys.RelaunchAsAdmin(os.Args[1:])
-		if err == nil {
-			return
-		}
-		logger.Printf("elevation failed: %v", err)
-	}
-
+	elevated := *handoff != "" // this is the elevated copy
 	win, url, err := ui.New(logPath, osName == "windows")
 	if err != nil {
 		logger.Printf("could not start the window: %v", err)
@@ -88,8 +82,18 @@ func main() {
 			logger.Printf("could not open the log: %v", err)
 		}
 	}
+	win.OpenLogFolder = func() {
+		if err := sys.OpenFolder(filepath.Dir(logPath)); err != nil {
+			logger.Printf("could not open the log folder: %v", err)
+		}
+	}
 	windowShown := *noWindow
-	if !*noWindow {
+	if elevated {
+		windowShown = true // the first copy's window shows this one's page
+		if err := os.WriteFile(*handoff, []byte(url), 0o600); err != nil {
+			logger.Printf("could not write the hand-off: %v", err)
+		}
+	} else if !*noWindow {
 		if err := sys.OpenWindow(url); err != nil {
 			logger.Printf("could not open the window: %v", err)
 		} else {
@@ -104,6 +108,16 @@ func main() {
 		}
 	}
 
+	// Windows: one permission prompt, so every app installs for everyone and none asks again
+	if needAdmin && !elevated && os.Getenv("FILEION_INSTALLER_ELEVATED") != "1" { // the test harness sets it to see the "rights are needed" message without a prompt
+		os.Exit(elevateAndWait(logger, win, *noWindow, logPath, os.Args[1:]))
+	}
+
+	// The elevated copy must not install where nobody can see it: if the window was closed during the permission prompt, nothing starts
+	if elevated && !*noWindow && !waitForWindow(win, 30*time.Second) {
+		logger.Printf("stopped: the window was closed while Windows asked for permission, so nothing was installed")
+		os.Exit(1)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() { <-win.Closed; cancel() }()
@@ -141,12 +155,18 @@ func main() {
 		waitForClose(win, *noWindow)
 		os.Exit(1)
 	}
+	m.Apps = manifest.OrderForRun(m.Apps) // the apps that need the person come last
 
 	names := make([]string, len(m.Apps))
 	for i, a := range m.Apps {
 		names[i] = ui.Sanitize(a.Name)
 	}
 	win.SetApps(names)
+	for i, a := range m.Apps {
+		if k := a.EffectiveMode(); k == manifest.ModePortable || k == manifest.ModeZip || k == manifest.ModeInteractive {
+			win.Mutate(i, func(r *ui.Row) { r.Kind = k })
+		}
+	}
 	if len(m.Apps) == 0 {
 		win.Note("None of the apps in this list can be installed unattended. Get them from their Fileion pages.")
 	}
@@ -164,8 +184,15 @@ func main() {
 			logger.Printf("alive: %v, %ds into the run", cur.Load(), int(time.Since(started).Seconds()))
 		}
 	}()
+
+	pf := newPortableFiles(*userDirs, logger)
+	win.RowAction = pf.rowAction(win)
 	r := &run.Runner{Client: client, TempDir: os.TempDir(), Installed: sys.Installed, Exec: sys.Exec,
 		AppTimeout: *appTimeout, Log: logger.Printf,
+		Portable: pf.store, AppsDir: pf.appsDir, ExecJob: sys.ExecJob, Front: sys.FrontWindow, Stopped: win.Stopping,
+		Arm:      func(a manifest.App) <-chan struct{} { return win.Arm(index[a.ID]) },
+		Ask:      func(ctx context.Context, a manifest.App) string { return win.Ask(ctx, index[a.ID]) },
+		Placed:   func(a manifest.App, folder, exe string) { pf.placed(win, index[a.ID], a, folder, exe) },
 		Transfer: func(a manifest.App, done, total int64) { win.Transfer(index[a.ID], done, total) },
 		Progress: func(a manifest.App, s run.Status, msg string, link string) {
 			cur.Store(a.Name + ": " + string(s))
@@ -176,18 +203,48 @@ func main() {
 			}
 		}}
 
-	ok, bad := 0, 0
-	for _, a := range m.Apps {
-		res := r.RunApp(ctx, a)
-		if res.OK() {
-			ok++
-		}
-		if res.Bad() {
-			bad++
+	results := make([]run.Result, len(m.Apps))
+	runRows := func(only func(run.Result) bool) {
+		for i, a := range m.Apps {
+			if only != nil && !only(results[i]) {
+				continue
+			}
+			if win.Stopping() {
+				results[i] = run.Result{Status: run.NotRun, Message: "Not run"}
+				win.Update(i, string(run.NotRun), "Not run", "")
+				continue
+			}
+			results[i] = r.RunApp(ctx, a)
 		}
 	}
+	count := func() (ok, bad int) {
+		for _, res := range results {
+			if res.OK() {
+				ok++
+			}
+			if res.Bad() {
+				bad++
+			}
+		}
+		return
+	}
+	runRows(nil)
+	ok, bad := count()
 	win.Finish(ok, bad)
 	logger.Printf("finished: %d worked, %d did not", ok, bad)
+	// "Retry failed apps" runs only the rows that failed, with the same checks; the one anonymous count is sent when the window is done with
+	for !*noWindow && bad > 0 {
+		act := waitForAction(win)
+		if act != "retry" {
+			break
+		}
+		logger.Printf("retry: the failed apps")
+		win.Reopen()
+		runRows(func(res run.Result) bool { return res.Bad() })
+		ok, bad = count()
+		win.Finish(ok, bad)
+		logger.Printf("finished again: %d worked, %d did not", ok, bad)
+	}
 	if *noReport {
 		logger.Printf("count not sent: -no-report")
 	} else if !win.SendReport() {
@@ -198,6 +255,83 @@ func main() {
 	waitForClose(win, *noWindow)
 	if bad > 0 {
 		os.Exit(1)
+	}
+}
+
+// elevateAndWait is the first (not elevated) copy on Windows: it asks Windows for permission, starts the elevated copy with the hand-off file and the
+// person's own folders, keeps its window on "Preparing" and moves it to the elevated copy's page. It returns the exit code for the process.
+func elevateAndWait(logger *log.Logger, win *ui.Server, headless bool, logPath string, args []string) int {
+	logger.Printf("not an administrator: asking Windows for elevation")
+	if old, _ := filepath.Glob(filepath.Join(os.TempDir(), "fileion-installer-*.handoff")); len(old) > 0 { // left by a copy that died: it holds an address that is gone
+		for _, f := range old {
+			os.Remove(f)
+		}
+	}
+	dl, pr, la := sys.UserDirs()
+	hand := filepath.Join(os.TempDir(), fmt.Sprintf("fileion-installer-%d.handoff", time.Now().UnixNano()))
+	wait, err := sys.RelaunchAsAdmin(append(append([]string{}, args...), "-handoff", hand, "-user-dirs", dl+"|"+pr+"|"+la))
+	if err != nil {
+		msg := "Administrator rights are needed to install apps, so nothing was installed. Run this file again and choose Yes at the permission prompt."
+		logger.Printf("elevation failed: %v", err)
+		win.Note(msg)
+		win.Finish(0, 0)
+		if headless {
+			fmt.Printf("%s\nLog: %s\n", msg, logPath)
+		}
+		waitForClose(win, headless)
+		return 1
+	}
+	var handed atomic.Bool
+	go func() { // the elevated copy writes its window's address; the window moves there
+		for !handed.Load() {
+			if b, err := os.ReadFile(hand); err == nil && len(b) > 0 {
+				win.Redirect(string(b))
+				os.Remove(hand)
+				handed.Store(true)
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+	}()
+	code, err := wait()
+	logger.Printf("the elevated copy ended with code %d (%v)", code, err)
+	if handed.Load() {
+		return code // it ran the whole thing in its own window
+	}
+	handed.Store(true)
+	win.Note("The installer stopped before it started. The log is at " + logPath)
+	win.Finish(0, 0)
+	waitForClose(win, headless)
+	return 1
+}
+
+// waitForWindow says whether the window asked for its page within d (it did not when it was closed during the permission prompt).
+func waitForWindow(win *ui.Server, d time.Duration) bool {
+	end := time.Now().Add(d)
+	for time.Now().Before(end) {
+		if win.Polled() {
+			return true
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return false
+}
+
+// waitForAction waits, with the run finished, for Close, "Retry failed apps" or a window that is gone.
+func waitForAction(win *ui.Server) string {
+	done := time.Now()
+	t := time.NewTicker(2 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-win.Closed:
+			return "close"
+		case <-win.Retried():
+			return "retry"
+		case <-t.C:
+			if win.Abandoned(done) {
+				return "abandoned"
+			}
+		}
 	}
 }
 

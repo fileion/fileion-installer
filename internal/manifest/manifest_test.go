@@ -142,3 +142,24 @@ func TestFetchRetriesOnceForANetworkErrorA5xxAnd404ButNotForOtherAnswers(t *test
 		t.Errorf("cancel: %v after %v", err, time.Since(start))
 	}
 }
+
+func TestModesAreReadOrderedForTheRunAndAnEmptyModeIsSilent(t *testing.T) {
+	m, err := Parse(strings.NewReader(`{"code":"aaaa1111","os":"windows","manifest_version":2,"apps":[
+	 {"id":1,"name":"A","url":"https://v.example/a.exe","sha256":"`+strings.Repeat("ab", 32)+`","mode":"interactive","silent_switch":""},
+	 {"id":2,"name":"B","url":"https://v.example/b.exe","sha256":"`+strings.Repeat("ab", 32)+`","silent_switch":"/S"},
+	 {"id":3,"name":"C","url":"https://v.example/c.zip","sha256":"`+strings.Repeat("ab", 32)+`","mode":"zip","zip_exe":"bin\\c.exe"},
+	 {"id":4,"name":"D","url":"https://v.example/d.exe","sha256":"`+strings.Repeat("ab", 32)+`","mode":"teleport"}]}`), "windows")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Apps) != 4 || m.Apps[1].EffectiveMode() != ModeSilent || m.Apps[2].ZipExe != `bin\c.exe` || m.Apps[3].KnownMode() {
+		t.Fatalf("apps: %+v", m.Apps)
+	}
+	names := ""
+	for _, a := range OrderForRun(m.Apps) {
+		names += a.Name
+	}
+	if names != "BCDA" {
+		t.Fatalf("order %s, want BCDA (interactive last)", names)
+	}
+}

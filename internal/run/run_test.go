@@ -1,6 +1,7 @@
 package run
 
 import (
+	"archive/zip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -17,6 +18,7 @@ import (
 
 	"fileion-installer/internal/manifest"
 	"fileion-installer/internal/match"
+	"fileion-installer/internal/portable"
 )
 
 func sum(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }
@@ -202,6 +204,27 @@ func TestAnInstallerThatHangsIsStoppedAndMarkedManualWithItsFileionPage(t *testi
 	}
 	if left, _ := filepath.Glob(filepath.Join(r.TempDir, "*")); len(left) != 0 {
 		t.Errorf("the installer file was kept: %v", left)
+	}
+}
+
+func TestTheTimeoutWaitsForTheKillToFinishBeforeItReturns(t *testing.T) {
+	body := []byte("setup with its own window")
+	s := &spy{hang: true}
+	srv := server(t, body, s)
+	r := newRunner(t, srv, notInstalled, s)
+	r.AppTimeout = 50 * time.Millisecond
+	var killed atomic.Bool
+	r.Exec = func(ctx context.Context, name string, args []string) error {
+		<-ctx.Done()
+		time.Sleep(300 * time.Millisecond) // taskkill /T /F takes a moment
+		killed.Store(true)
+		return ctx.Err()
+	}
+	if res := r.RunApp(context.Background(), app(srv, sum(body))); res.Status != Manual {
+		t.Fatalf("status = %s, want manual", res.Status)
+	}
+	if !killed.Load() {
+		t.Fatal("the result came back before the installer's kill finished (the program could exit and leave it running)")
 	}
 }
 
@@ -498,5 +521,325 @@ func TestAnInstallerThatExitsNonZeroButLeftTheAppInstalledIsDone(t *testing.T) {
 	r.Exec = func(ctx context.Context, name string, args []string) error { return fmt.Errorf("exit status 3010") }
 	if res := r.RunApp(context.Background(), app(srv, sum(body))); res.Status != Done {
 		t.Fatalf("a non-zero exit with the app installed: %+v", res)
+	}
+}
+
+// --- v0.3.0: portable, zip and interactive apps ---
+
+func zipBytes(t *testing.T, files map[string]string) []byte {
+	t.Helper()
+	var b strings.Builder
+	w := zip.NewWriter(&b)
+	for n, c := range files {
+		e, _ := w.Create(n)
+		e.Write([]byte(c))
+	}
+	w.Close()
+	return []byte(b.String())
+}
+
+func portableRunner(t *testing.T, srv *httptest.Server, s *spy) *Runner {
+	t.Helper()
+	r := newRunner(t, srv, notInstalled, s)
+	r.AppsDir = filepath.Join(t.TempDir(), "Downloads", "Fileion Apps")
+	r.Portable = &portable.Store{Path: filepath.Join(t.TempDir(), "portable.json")}
+	return r
+}
+
+func TestAPortableAppIsSavedInItsFolderNotRunAndListedThenSkippedOnTheNextRun(t *testing.T) {
+	s := &spy{}
+	body := []byte("MZ portable program")
+	srv := server(t, body, s)
+	r := portableRunner(t, srv, s)
+	a := app(srv, sum(body))
+	a.Name, a.WingetID, a.Mode, a.InstallerType, a.SilentSwitch = "Rufus", "Pete.Rufus", "portable", "portable", ""
+	var placed string
+	r.Placed = func(_ manifest.App, folder, exe string) { placed = exe }
+
+	res := r.RunApp(context.Background(), a)
+
+	if res.Status != Saved || !res.OK() {
+		t.Fatalf("status = %s (%s)", res.Status, res.Message)
+	}
+	if want := filepath.Join(r.AppsDir, "Rufus", "test.exe"); placed != want {
+		t.Fatalf("placed %q, want %q", placed, want)
+	}
+	if b, _ := os.ReadFile(placed); string(b) != string(body) {
+		t.Fatal("the file is not in its folder")
+	}
+	if len(s.execs) != 0 {
+		t.Fatalf("a portable app was started: %v", s.execs)
+	}
+	if !strings.HasPrefix(res.Message, "Saved in Downloads"+string(filepath.Separator)+"Fileion Apps"+string(filepath.Separator)+"Rufus") {
+		t.Errorf("message: %q", res.Message)
+	}
+	hits := s.hits
+	if again := r.RunApp(context.Background(), a); again.Status != UpToDate || s.hits != hits {
+		t.Fatalf("second run: %s, downloads %d -> %d", again.Status, hits, s.hits)
+	}
+}
+
+func TestAPortableHashMismatchIsNeverSaved(t *testing.T) {
+	s := &spy{}
+	srv := server(t, []byte("tampered"), s)
+	r := portableRunner(t, srv, s)
+	a := app(srv, sum([]byte("the real one")))
+	a.Mode, a.WingetID, a.SilentSwitch = "portable", "X.Y", ""
+
+	if res := r.RunApp(context.Background(), a); res.Status != Mismatch {
+		t.Fatalf("status = %s", res.Status)
+	}
+	if left, _ := filepath.Glob(filepath.Join(r.AppsDir, "*", "*")); len(left) != 0 {
+		t.Fatalf("saved anyway: %v", left)
+	}
+}
+
+func TestAZipIsVerifiedUnpackedAndDeleted(t *testing.T) {
+	s := &spy{}
+	z := zipBytes(t, map[string]string{"FSViewer/fsv.exe": "x", "FSViewer/readme.txt": "y"})
+	srv := server(t, z, s)
+	r := portableRunner(t, srv, s)
+	a := app(srv, sum(z))
+	a.Name, a.WingetID, a.Mode, a.InstallerType, a.SilentSwitch, a.ZipExe = "FastStone", "FS.Viewer", "zip", "zip", "", `FSViewer\fsv.exe`
+	var exe string
+	r.Placed = func(_ manifest.App, _, e string) { exe = e }
+	var seen []Status
+	r.Progress = func(_ manifest.App, st Status, _ string, _ string) { seen = append(seen, st) }
+
+	res := r.RunApp(context.Background(), a)
+
+	if res.Status != Saved {
+		t.Fatalf("status = %s (%s)", res.Status, res.Message)
+	}
+	if want := filepath.Join(r.AppsDir, "FastStone", "FSViewer", "fsv.exe"); exe != want {
+		t.Fatalf("exe %q, want %q", exe, want)
+	}
+	if left, _ := filepath.Glob(filepath.Join(r.TempDir, "*")); len(left) != 0 {
+		t.Fatalf("the zip was kept: %v", left)
+	}
+	unpacked := false
+	for _, st := range seen {
+		unpacked = unpacked || st == Unpacking
+	}
+	if !unpacked {
+		t.Errorf("never said Unpacking: %v", seen)
+	}
+}
+
+func TestAZipWithAnEntryOutsideItsFolderFailsAndWritesNothingOutside(t *testing.T) {
+	s := &spy{}
+	z := zipBytes(t, map[string]string{"../../escape.txt": "x"})
+	srv := server(t, z, s)
+	r := portableRunner(t, srv, s)
+	a := app(srv, sum(z))
+	a.Mode, a.WingetID, a.SilentSwitch = "zip", "Z.Z", ""
+
+	if res := r.RunApp(context.Background(), a); res.Status != Failed {
+		t.Fatalf("status = %s", res.Status)
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(r.AppsDir), "escape.txt")); err == nil {
+		t.Fatal("wrote outside the folder")
+	}
+}
+
+func interactiveApp(srv *httptest.Server, hash string) manifest.App {
+	a := app(srv, hash)
+	a.Mode, a.SilentSwitch, a.InstallerType = "interactive", "", "exe"
+	return a
+}
+
+func TestAnInteractiveAppIsStartedWithoutASwitchAndIsDoneWhenTheRegistryHasIt(t *testing.T) {
+	s := &spy{}
+	body := []byte("vendor setup")
+	srv := server(t, body, s)
+	installed := false
+	r := newRunner(t, srv, func(manifest.App) (string, bool) { return "2.0.0", installed }, s)
+	r.Exec = func(ctx context.Context, name string, args []string) error {
+		s.execs = append(s.execs, append([]string{name}, args...))
+		installed = true // the person finishes the setup
+		return nil
+	}
+	fronted := 0
+	r.Front = func() { fronted++ }
+	var seen []Status
+	r.Progress = func(_ manifest.App, st Status, _ string, _ string) { seen = append(seen, st) }
+
+	res := r.RunApp(context.Background(), interactiveApp(srv, sum(body)))
+
+	if res.Status != Done {
+		t.Fatalf("status = %s (%s)", res.Status, res.Message)
+	}
+	if len(s.execs) != 1 || len(s.execs[0]) != 1 {
+		t.Fatalf("started with a switch or not once: %v", s.execs)
+	}
+	if fronted != 1 {
+		t.Errorf("the window was brought to the front %d times", fronted)
+	}
+	has := map[Status]bool{}
+	for _, st := range seen {
+		has[st] = true
+	}
+	if !has[YourTurn] {
+		t.Errorf("never said it is the person's turn: %v", seen)
+	}
+}
+
+func TestAnInteractiveSetupClosedWithoutTheAppIsNotFinishedThenRetryRunsItAgainAndSkipMovesOn(t *testing.T) {
+	s := &spy{}
+	body := []byte("vendor setup")
+	srv := server(t, body, s)
+	r := newRunner(t, srv, notInstalled, s)
+	answers := []string{"retry", "skip"}
+	asked := 0
+	r.Ask = func(ctx context.Context, a manifest.App) string {
+		asked++
+		a2 := answers[0]
+		answers = answers[1:]
+		return a2
+	}
+	var seen []Status
+	r.Progress = func(_ manifest.App, st Status, _ string, _ string) { seen = append(seen, st) }
+
+	res := r.RunApp(context.Background(), interactiveApp(srv, sum(body)))
+
+	if res.Status != Skipped || res.Bad() || res.OK() {
+		t.Fatalf("status = %s", res.Status)
+	}
+	if len(s.execs) != 2 || asked != 2 {
+		t.Fatalf("runs %d, asked %d, want 2 and 2", len(s.execs), asked)
+	}
+	notFinished := 0
+	for _, st := range seen {
+		if st == NotFinished {
+			notFinished++
+		}
+	}
+	if notFinished != 2 {
+		t.Errorf("NotFinished said %d times: %v", notFinished, seen)
+	}
+}
+
+func TestSkipEndsAnInteractiveSetupThatNeverReturnsAndTheHashIsStillCheckedFirst(t *testing.T) {
+	s := &spy{hang: true}
+	body := []byte("vendor setup")
+	srv := server(t, body, s)
+	r := newRunner(t, srv, notInstalled, s)
+	skip := make(chan struct{})
+	r.Arm = func(manifest.App) <-chan struct{} { return skip }
+	r.Progress = func(_ manifest.App, st Status, _ string, _ string) {
+		if st == YourTurn {
+			go func() { time.Sleep(50 * time.Millisecond); close(skip) }()
+		}
+	}
+	if res := r.RunApp(context.Background(), interactiveApp(srv, sum(body))); res.Status != Skipped {
+		t.Fatalf("status = %s (%s)", res.Status, res.Message)
+	}
+
+	s2 := &spy{}
+	srv2 := server(t, []byte("tampered"), s2)
+	r2 := newRunner(t, srv2, notInstalled, s2)
+	if res := r2.RunApp(context.Background(), interactiveApp(srv2, sum(body))); res.Status != Mismatch || len(s2.execs) != 0 {
+		t.Fatalf("a wrong hash must stop before the setup opens: %s %v", res.Status, s2.execs)
+	}
+}
+
+func TestAnUnknownModeIsNotRunAndOrderForRunPutsInteractiveLast(t *testing.T) {
+	s := &spy{}
+	srv := server(t, []byte("x"), s)
+	r := newRunner(t, srv, notInstalled, s)
+	a := app(srv, sum([]byte("x")))
+	a.Mode = "teleport"
+	if res := r.RunApp(context.Background(), a); res.Status != Unsupported || s.hits != 0 {
+		t.Fatalf("status = %s, downloads %d", res.Status, s.hits)
+	}
+	got := manifest.OrderForRun([]manifest.App{{Name: "a", Mode: "interactive"}, {Name: "b"}, {Name: "c", Mode: "portable"}, {Name: "d", Mode: "interactive"}, {Name: "e", Mode: "silent"}})
+	names := ""
+	for _, x := range got {
+		names += x.Name
+	}
+	if names != "bcead" {
+		t.Fatalf("order = %s, want bcead", names)
+	}
+}
+
+func TestAnInteractiveSetupThatLeavesTheAppRunningIsDoneAfterAGraceAndNothingIsKilled(t *testing.T) {
+	s := &spy{}
+	body := []byte("vendor setup")
+	srv := server(t, body, s)
+	var installed atomic.Bool
+	r := newRunner(t, srv, func(manifest.App) (string, bool) { return "2.0.0", installed.Load() }, s)
+	r.PollEvery, r.Grace = 10*time.Millisecond, 60*time.Millisecond
+	killed := false
+	r.ExecJob = func(ctx context.Context, name string, args []string, leave <-chan struct{}) error {
+		installed.Store(true) // the setup installs, then launches the app and its window stays in the job
+		select {
+		case <-leave:
+			return nil // released, not ended
+		case <-ctx.Done():
+			killed = true
+			return ctx.Err()
+		}
+	}
+	start := time.Now()
+	res := r.RunApp(context.Background(), interactiveApp(srv, sum(body)))
+	if res.Status != Done || !strings.Contains(res.Message, "still open") {
+		t.Fatalf("status = %s (%s)", res.Status, res.Message)
+	}
+	if killed || time.Since(start) > 5*time.Second {
+		t.Fatalf("killed %v after %v", killed, time.Since(start))
+	}
+}
+
+func TestSkipOrStopAfterTheAppIsInstalledIsDoneAndStopOnAnOpenSetupSaysStopped(t *testing.T) {
+	s := &spy{hang: true}
+	body := []byte("vendor setup")
+	srv := server(t, body, s)
+	var installed atomic.Bool
+	r := newRunner(t, srv, func(manifest.App) (string, bool) { return "2.0.0", installed.Load() }, s)
+	r.PollEvery, r.Grace = time.Hour, time.Hour // the registry is not polled: only the check after Skip sees the app
+	skip := make(chan struct{})
+	r.Arm = func(manifest.App) <-chan struct{} { return skip }
+	r.Progress = func(_ manifest.App, st Status, _ string, _ string) {
+		if st == YourTurn {
+			go func() { time.Sleep(30 * time.Millisecond); installed.Store(true); close(skip) }()
+		}
+	}
+	if res := r.RunApp(context.Background(), interactiveApp(srv, sum(body))); res.Status != Done {
+		t.Fatalf("Skip after the app was installed gave %s", res.Status)
+	}
+
+	s2 := &spy{hang: true}
+	srv2 := server(t, body, s2)
+	r2 := newRunner(t, srv2, notInstalled, s2)
+	skip2 := make(chan struct{})
+	r2.Arm = func(manifest.App) <-chan struct{} { return skip2 }
+	r2.Stopped = func() bool { return true }
+	r2.Progress = func(_ manifest.App, st Status, _ string, _ string) {
+		if st == YourTurn {
+			go func() { time.Sleep(30 * time.Millisecond); close(skip2) }()
+		}
+	}
+	if res := r2.RunApp(context.Background(), interactiveApp(srv2, sum(body))); res.Status != Cancelled || res.Message != "Stopped" {
+		t.Fatalf("Stop gave %s %q, want Cancelled Stopped", res.Status, res.Message)
+	}
+}
+
+func TestAPortableFolderThatIsALinkIsNotWrittenThrough(t *testing.T) {
+	s := &spy{}
+	body := []byte("MZ")
+	srv := server(t, body, s)
+	r := portableRunner(t, srv, s)
+	outside := t.TempDir()
+	os.MkdirAll(r.AppsDir, 0o755)
+	if err := os.Symlink(outside, filepath.Join(r.AppsDir, "Test")); err != nil {
+		t.Skip("no symlinks here")
+	}
+	a := app(srv, sum(body))
+	a.Mode, a.WingetID, a.SilentSwitch = "portable", "L.L", ""
+	if res := r.RunApp(context.Background(), a); res.Status != Failed {
+		t.Fatalf("status = %s", res.Status)
+	}
+	if left, _ := filepath.Glob(filepath.Join(outside, "*")); len(left) != 0 {
+		t.Fatalf("wrote through the link: %v", left)
 	}
 }

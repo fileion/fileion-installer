@@ -3,13 +3,16 @@
 package ui
 
 import (
+	"context"
 	"crypto/rand"
 	"embed"
 	"encoding/hex"
 	"encoding/json"
 	"net"
 	"net/http"
+	neturl "net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -32,9 +35,13 @@ type Row struct {
 	Status  string `json:"status"`
 	Message string `json:"message"`
 	Link    string `json:"link,omitempty"`
-	Done    int64  `json:"done,omitempty"`  // bytes of the download that have arrived
-	Total   int64  `json:"total,omitempty"` // bytes in all, when the vendor says
-	Since   int64  `json:"since,omitempty"` // unix ms when this status began
+	Done    int64  `json:"done,omitempty"`   // bytes of the download that have arrived
+	Total   int64  `json:"total,omitempty"`  // bytes in all, when the vendor says
+	Since   int64  `json:"since,omitempty"`  // unix ms when this status began
+	Kind    string `json:"kind,omitempty"`   // "portable", "zip" or "interactive": the badge ("Portable", "Zip", "A few clicks")
+	Folder  string `json:"folder,omitempty"` // where a portable app or a zip is (the full path)
+	CanRun  bool   `json:"canRun,omitempty"` // a program to Run is known (a portable app, or a zip whose program is known)
+	InStart bool   `json:"inStart,omitempty"`
 }
 
 // State is what the page polls.
@@ -48,6 +55,11 @@ type State struct {
 	Send     bool   `json:"send"`
 	NoCode   bool   `json:"nocode"`
 	LogPath  string `json:"logPath"` // the real log file, so a window that lost the installer can still say where it is
+	// Preparing is the first screen: the window is up while Windows asks for permission and the list loads. Redirect is the address of the
+	// elevated installer's own window, which the page then moves to (same window, no second one).
+	Preparing bool   `json:"preparing"`
+	Redirect  string `json:"redirect,omitempty"`
+	Stopping  bool   `json:"stopping"` // "Stop after the current app" was chosen
 }
 
 // Server owns the state and the HTTP side.
@@ -63,6 +75,16 @@ type Server struct {
 	token   string
 	addr    string
 	once    sync.Once
+	// RowAction does what a row's button asks (run, open, start, move); set by main, run in its own goroutine.
+	RowAction func(i int, action string)
+	// OpenLogFolder opens the folder of the log file in Explorer.
+	OpenLogFolder func()
+
+	armed    map[int]chan struct{} // an interactive row's Skip channel
+	ask      map[int]chan string   // Retry or Skip after "Not finished"
+	retry    chan struct{}
+	stopCh   chan struct{}
+	stopOnce sync.Once
 }
 
 // New starts listening and returns the server and the address to open.
@@ -75,7 +97,9 @@ func New(logPath string, admin bool) (*Server, string, error) {
 	if _, err := rand.Read(b); err != nil {
 		return nil, "", err
 	}
-	s := &Server{LogPath: logPath, Closed: make(chan struct{}), token: hex.EncodeToString(b), addr: ln.Addr().String()}
+	s := &Server{LogPath: logPath, Closed: make(chan struct{}), token: hex.EncodeToString(b), addr: ln.Addr().String(),
+		armed: map[int]chan struct{}{}, ask: map[int]chan string{}, retry: make(chan struct{}, 1), stopCh: make(chan struct{})}
+	s.state.Preparing = true
 	s.state.Admin, s.state.Send, s.state.LogPath = admin, true, logPath // the count is sent unless the visitor ticks "Don't send"
 	mux := http.NewServeMux()
 	base := "/t/" + s.token + "/"
@@ -85,6 +109,24 @@ func New(logPath string, admin bool) (*Server, string, error) {
 	mux.HandleFunc(base+"close", s.guard(s.close))
 	mux.HandleFunc(base+"report", s.guard(s.report))
 	mux.HandleFunc(base+"open-log", s.guard(s.openLog))
+	mux.HandleFunc(base+"open-log-folder", s.guard(s.post(func() {
+		if s.OpenLogFolder != nil {
+			s.OpenLogFolder()
+		}
+	})))
+	mux.HandleFunc(base+"stop", s.guard(s.post(s.Stop)))
+	mux.HandleFunc(base+"retry", s.guard(s.post(func() {
+		s.mu.Lock()
+		ok := s.state.Finished
+		s.mu.Unlock()
+		if ok {
+			select {
+			case s.retry <- struct{}{}:
+			default:
+			}
+		}
+	})))
+	mux.HandleFunc(base+"row/", s.guard(s.row(base+"row/")))
 	mux.HandleFunc(base+"manifest.webmanifest", s.guard(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/manifest+json")
 		w.Write([]byte(manifestJSON))
@@ -186,7 +228,170 @@ func (s *Server) SendReport() bool { s.mu.Lock(); defer s.mu.Unlock(); return s.
 // NoCode switches the window to the one message of a file that has no app list (the page adds the link to the setup page).
 func (s *Server) NoCode(msg string) {
 	s.mu.Lock()
-	s.state.Note, s.state.NoCode, s.state.Finished = msg, true, true
+	s.state.Note, s.state.NoCode, s.state.Finished, s.state.Preparing = msg, true, true, false
+	s.mu.Unlock()
+}
+
+// post wraps an action that takes no input: POST only, 204 when done.
+func (s *Server) post(do func()) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "use POST", http.StatusMethodNotAllowed)
+			return
+		}
+		do()
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// row handles a row's button: POST row/{action}?i=N. Skip and Retry steer an interactive app; the rest (run, open, start, move) is main's job.
+func (s *Server) row(prefix string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		action := strings.TrimPrefix(r.URL.Path, prefix)
+		i, err := strconv.Atoi(r.URL.Query().Get("i"))
+		s.mu.Lock()
+		valid := err == nil && i >= 0 && i < len(s.state.Rows)
+		s.mu.Unlock()
+		if r.Method != http.MethodPost || !valid {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		switch action {
+		case "skip":
+			s.skipRow(i)
+		case "retry":
+			s.answer(i, "retry")
+		case "run", "open", "start", "move":
+			if s.RowAction != nil {
+				go s.RowAction(i, action)
+			}
+		default:
+			http.Error(w, "unknown action", http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// Arm returns a channel that is closed when the person presses Skip on row i, or Stop. A new one for every attempt.
+func (s *Server) Arm(i int) <-chan struct{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c := make(chan struct{})
+	if s.state.Stopping {
+		close(c)
+	} else {
+		s.armed[i] = c
+	}
+	return c
+}
+
+func (s *Server) skipRow(i int) {
+	s.mu.Lock()
+	c, waiting := s.armed[i], i >= 0 && i < len(s.state.Rows) && s.state.Rows[i].Status == "notfinished"
+	delete(s.armed, i)
+	s.mu.Unlock()
+	if c != nil {
+		close(c)
+	}
+	if waiting {
+		s.answer(i, "skip")
+	}
+}
+
+func (s *Server) answer(i int, a string) {
+	s.mu.Lock()
+	c := s.ask[i]
+	s.mu.Unlock()
+	if c != nil {
+		select {
+		case c <- a:
+		default:
+		}
+	}
+}
+
+// Ask waits for the person's Retry or Skip on row i ("skip" when the run is stopped or ctx ends).
+func (s *Server) Ask(ctx context.Context, i int) string {
+	s.mu.Lock()
+	c, stopCh := s.ask[i], s.stopCh
+	s.mu.Unlock()
+	if c == nil {
+		return "skip"
+	}
+	for len(c) > 0 { // an old answer
+		<-c
+	}
+	select {
+	case a := <-c:
+		return a
+	case <-stopCh:
+	case <-ctx.Done():
+	}
+	return "skip"
+}
+
+// Stop is "Stop after the current app": nothing new is started, and an app that waits for the person is skipped.
+func (s *Server) Stop() {
+	s.mu.Lock()
+	s.state.Stopping = true
+	for i, c := range s.armed {
+		close(c)
+		delete(s.armed, i)
+	}
+	stopCh, once := s.stopCh, &s.stopOnce
+	s.mu.Unlock()
+	once.Do(func() { close(stopCh) })
+}
+
+// Polled says whether the window has asked for the state at least once.
+func (s *Server) Polled() bool { s.mu.Lock(); defer s.mu.Unlock(); return s.polled }
+
+// Stopping says whether Stop was chosen.
+func (s *Server) Stopping() bool { s.mu.Lock(); defer s.mu.Unlock(); return s.state.Stopping }
+
+// Retried is signalled when the person presses "Retry failed apps".
+func (s *Server) Retried() <-chan struct{} { return s.retry }
+
+// Reopen makes a finished run a running one again (for the retry of the failed apps).
+func (s *Server) Reopen() {
+	s.mu.Lock()
+	s.state.Finished, s.state.Note, s.state.Stopping = false, "", false
+	s.stopCh, s.stopOnce = make(chan struct{}), sync.Once{} // a Stop before the retry must not stop the retry
+	s.mu.Unlock()
+}
+
+// Mutate changes one row under the lock (kind, folder, buttons).
+func (s *Server) Mutate(i int, f func(*Row)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if i >= 0 && i < len(s.state.Rows) {
+		f(&s.state.Rows[i])
+	}
+}
+
+// RowName and RowFolder are for main's row actions.
+func (s *Server) Row(i int) (Row, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if i < 0 || i >= len(s.state.Rows) {
+		return Row{}, false
+	}
+	return s.state.Rows[i], true
+}
+
+// Redirect tells the Preparing page to move to the elevated installer's window (only a local address is accepted).
+func (s *Server) Redirect(raw string) {
+	u, err := neturl.Parse(raw)
+	if err != nil || u.Scheme != "http" || u.User != nil || u.Hostname() != "127.0.0.1" || !strings.HasPrefix(u.Path, "/t/") {
+		return
+	}
+	if port, err := strconv.Atoi(u.Port()); err != nil || port < 1 || port > 65535 {
+		return
+	}
+	url := u.String()
+	s.mu.Lock()
+	s.state.Redirect = url
 	s.mu.Unlock()
 }
 
@@ -197,7 +402,11 @@ func (s *Server) Note(text string) { s.mu.Lock(); s.state.Note = text; s.mu.Unlo
 func (s *Server) SetApps(names []string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.state.Preparing = false
 	s.state.Rows = make([]Row, len(names))
+	for i := range names {
+		s.ask[i] = make(chan string, 1)
+	}
 	for i, n := range names {
 		s.state.Rows[i] = Row{Name: n, Status: "queued", Message: "Waiting"}
 	}
@@ -228,6 +437,7 @@ func (s *Server) Transfer(i int, done, total int64) {
 // Finish marks the run done and sets the counts shown at the end.
 func (s *Server) Finish(ok, bad int) {
 	s.mu.Lock()
+	s.state.Preparing = false
 	s.state.Finished, s.state.OK, s.state.Bad = true, ok, bad
 	s.mu.Unlock()
 }
