@@ -12,6 +12,10 @@ on:
         description: 'Test the PUBLISHED installer of this release (e.g. v0.1.0) instead of building it: its Fileion-Installer.exe is downloaded from GitHub and checked against the release SHA256SUMS and the MZ header. The type-default matrix is skipped.'
         required: false
         default: ''
+      only_installer:
+        description: 'Run only the installer job (no wait-detect, no type-default matrix)'
+        type: boolean
+        default: false
       set_code:
         description: 'With release_tag: a real set code (8-12 hex) to run against the LIVE manifest at software.fileion.com. Runs send no count except the one named in the summary.'
         required: false
@@ -22,7 +26,7 @@ jobs:
   installer:
     if: inputs.set_code == '' || inputs.release_tag == ''
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 75
     defaults:
       run:
         shell: pwsh
@@ -96,18 +100,31 @@ jobs:
           }
           Write-Manifest 'eeee6666' (MatchApp 6 'Test Match Update' '2.0' @{ name = 'Fileion Matchtest '; publisher = 'Fileion Test' } '/S /CODE={FILEION-MATCH-NEW} /NAME=Fileion_Matchtest_2.0 /PUBLISHER=Fileion_Test /VERSION=2.0')
           Write-Manifest 'ffff7777' (MatchApp 7 'Test Match HKCU' '4.0' @{ name = 'Fileion Hkcutest'; publisher = 'Fileion Test HKCU' } '/S /CODE={FILEION-MATCH-HKCU}')
-      - name: Run the cases
+      - name: Run the v0.3.0 cases
+        if: always()
+        continue-on-error: true
+        timeout-minutes: 25
         run: |
           # started in this step: a process left running by an earlier step is cleaned up when that step ends
           Start-Process C:\ftest\testserver.exe -ArgumentList '-addr','127.0.0.1:8443','-dir','C:\ftest\www','-cert','C:\ftest\cert.pem','-key','C:\ftest\key.pem' -RedirectStandardError C:\ftest\out\server.log -WindowStyle Hidden
           Start-Sleep 3
           $ErrorActionPreference = 'Continue'
           # A GUI program: `&` does not wait for it and gives no exit code, so every run goes through Start-Process -Wait with its output in files
-          function Inst($exe, [string[]]$a) {
+          # Every run has a time limit (the process tree is killed and the case is marked TIMEOUT with its name), and the step records the case it is on.
+          $script:Started = @()
+          function Reap { foreach ($q in $script:Started) { if (-not $q.HasExited) { taskkill /T /F /PID $q.Id | Out-Null } }; $script:Started = @() }
+          function Inst($exe, [string[]]$a, [int]$limit = 240) {
+            Reap
             $o = 'C:\ftest\out\_o.txt'; $e = 'C:\ftest\out\_e.txt'
             Remove-Item $o, $e -ErrorAction SilentlyContinue
-            $p = Start-Process -FilePath $exe -ArgumentList $a -Wait -PassThru -RedirectStandardOutput $o -RedirectStandardError $e -WindowStyle Hidden
-            $script:LASTEXIT = $p.ExitCode
+            "$(Get-Date -Format o) Inst $a" | Add-Content C:\ftest\out\progress.txt
+            $p = Start-Process -FilePath $exe -ArgumentList $a -PassThru -RedirectStandardOutput $o -RedirectStandardError $e -WindowStyle Hidden
+            $null = $p.Handle
+            if (-not $p.WaitForExit($limit * 1000)) {
+              taskkill /T /F /PID $p.Id | Out-Null
+              $script:rows += "| TIMEOUT: $a | FAIL | no exit after $limit s, process tree killed |"; $script:fail += "TIMEOUT: $a"
+              $script:LASTEXIT = -1
+            } else { $script:LASTEXIT = $p.ExitCode }
             (Get-Content $o -Raw -ErrorAction SilentlyContinue) + (Get-Content $e -Raw -ErrorAction SilentlyContinue)
           }
           $fail = @()
@@ -117,6 +134,163 @@ jobs:
             $script:rows += "| $name | $(if ($ok) {'PASS'} else {'FAIL'}) | $detail |"
             if (-not $ok) { $script:fail += $name }
           }
+          $installer = 'C:\ftest\Fileion-Test-and-1-more-aaaa1111.exe'
+          $env:FILEION_INSTALLER_ELEVATED = '1'   # the runner is already an administrator: skip the permission prompt
+          $common = @('-base', 'https://127.0.0.1:8443', '-no-window', '-no-report')
+
+          # 11-17. v0.3.0 (a fresh build only: an older installer does not know these modes; the published-release run has the old-installer case below)
+          if ('${{ inputs.release_tag }}' -eq '') {
+            $env:FILEION_INSTALLER_ELEVATED = '1'
+            $dl = [Environment]::ExpandEnvironmentVariables((Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders').'{374DE290-123F-4565-9164-39C4925E467B}')
+            $apps = Join-Path $dl 'Fileion Apps'
+            $log = Join-Path $env:TEMP 'fileion-installer.log'
+            $un = 'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall'
+            function Wait-Log($pattern, $secs) { $end = (Get-Date).AddSeconds($secs); while ((Get-Date) -lt $end) { if ((Get-Content $log -Raw -ErrorAction SilentlyContinue) -match $pattern) { return $true }; Start-Sleep -Milliseconds 300 }; $false }
+            function Start-Inst($code, $name) { Reap; Remove-Item $log -ErrorAction SilentlyContinue; "$(Get-Date -Format o) Start-Inst $code $name" | Add-Content C:\ftest\out\progress.txt; $q = Start-Process $installer -ArgumentList ($common + @('-code', $code)) -PassThru -WindowStyle Hidden -RedirectStandardOutput "C:\ftest\out\$name.txt"; $null = $q.Handle; $script:Started += $q; $q }
+            function Window-Url { ([regex]::Match((Get-Content $log -Raw), 'window: (http://127\.0\.0\.1:\d+/t/[0-9a-f]+/)')).Groups[1].Value }
+
+            # 11. no console window: a GUI program (PE subsystem 2) with no console child while it works
+            $bytes = [IO.File]::ReadAllBytes($installer); $pe = [BitConverter]::ToInt32($bytes, 60); $sub = [BitConverter]::ToUInt16($bytes, $pe + 92)
+            $p = Start-Inst 'cccc3333' 'case11-noconsole'
+            Start-Sleep 5
+            $con = @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$($p.Id)" | Where-Object { $_.Name -eq 'conhost.exe' }).Count
+            taskkill /T /F /PID $p.Id | Out-Null; Stop-Process -Name fakeapp -Force -ErrorAction SilentlyContinue
+            Check 'no console window: GUI subsystem, no console host under the installer' ($sub -eq 2 -and $con -eq 0) "PE subsystem $sub, console hosts: $con"
+
+            # 12. portable: saved in its own folder under Downloads, not run, listed; the next run skips it
+            Remove-Item $apps -Recurse -Force -ErrorAction SilentlyContinue; Remove-Item "$env:LOCALAPPDATA\Fileion\portable.json" -ErrorAction SilentlyContinue
+            $out = Inst $installer ($common + @('-code','pppp1111')); $c12 = $script:LASTEXIT
+            $out | Set-Content C:\ftest\out\case12a-portable.txt
+            Check 'portable: saved in Downloads\Fileion Apps\<App>, not run' ($c12 -eq 0 -and $out -match 'saved' -and (Test-Path "$apps\Test Portable\fakeapp.exe") -and -not (Get-Process -Name fakeapp -ErrorAction SilentlyContinue)) "exit $c12"
+            $out = Inst $installer ($common + @('-code','pppp1111')); $c12b = $script:LASTEXIT
+            Check 'portable: the next run finds it in portable.json and skips it' ($c12b -eq 0 -and $out -match 'up-to-date' -and (Select-String -Path "$env:LOCALAPPDATA\Fileion\portable.json" -Pattern 'Test.11' -Quiet)) "exit $c12b"
+
+            # 13. zip: verified, unpacked into its folder, the zip deleted
+            $out = Inst $installer ($common + @('-code','zzzz2222')); $c13 = $script:LASTEXIT
+            $out | Set-Content C:\ftest\out\case13-zip.txt
+            $zipsLeft = @(Get-ChildItem $env:TEMP -Filter 'fileion-*.zip' -ErrorAction SilentlyContinue).Count
+            Check 'zip: unpacked into its folder and the zip is deleted' ($c13 -eq 0 -and $out -match 'saved' -and (Test-Path "$apps\Test Zip\tool.exe") -and $zipsLeft -eq 0) "exit $c13, zips left: $zipsLeft"
+
+            # 14. interactive: runs after the silent app; the setup starts the real setup and exits (the whole process tree is waited for); the person finishes it
+            Remove-Item C:\ftest\marker-ok -ErrorAction SilentlyContinue; reg delete "HKLM\$un\{FILEION-INT-OK}" /f 2>$null | Out-Null
+            $p = Start-Inst 'iiii3333' 'case14-interactive'
+            $turn = Wait-Log 'yourturn' 60
+            $early = (Get-Content $log -Raw) -notmatch 'Test Interactive: done'
+            New-Item C:\ftest\marker-ok -ItemType File -Force | Out-Null   # the person finishes the setup
+            $ended = $p.WaitForExit(60000)
+            $lg = Get-Content $log -Raw -ErrorAction SilentlyContinue
+            $order = $lg.IndexOf('Test Silent Last: done') -ge 0 -and $lg.IndexOf('Test Silent Last: done') -lt $lg.IndexOf('Test Interactive: yourturn')
+            Check 'interactive: runs last, waits for the whole setup, then Done' ($turn -and $early -and $ended -and $order -and $p.ExitCode -eq 0 -and (Key '{FILEION-INT-OK}')) "your turn: $turn, ended: $ended, order ok: $order, key: $(Key '{FILEION-INT-OK}')"
+
+            # 15. interactive, setup closed without installing: Not finished; Skip (POST on the window's address) moves on, nothing is a failure
+            $p = Start-Inst 'iiii4444' 'case15-closed'
+            $nf = Wait-Log 'notfinished' 60
+            $url = Window-Url
+            if ($url) { Invoke-WebRequest "${url}row/skip?i=0" -Method Post -UseBasicParsing | Out-Null }
+            $ended = $p.WaitForExit(30000)
+            Check 'interactive: setup closed early is Not finished, Skip ends it, no failure' ($nf -and $ended -and $p.ExitCode -eq 0 -and ((Get-Content C:\ftest\out\case15-closed.txt -Raw) -match 'skipped')) "not finished: $nf, ended: $ended"
+
+            # 16. interactive setup that never returns: Skip ends the whole job, nothing is left running
+            $p = Start-Inst 'iiii5555' 'case16-hang'
+            $turn = Wait-Log 'yourturn' 60
+            $url = Window-Url
+            if ($url) { Invoke-WebRequest "${url}row/skip?i=0" -Method Post -UseBasicParsing | Out-Null }
+            $ended = $p.WaitForExit(30000)
+            $left = @(Get-Process -Name 'int-hang' -ErrorAction SilentlyContinue).Count
+            Check 'interactive: Skip ends a setup that never returns' ($turn -and $ended -and $left -eq 0) "ended: $ended, processes left: $left"
+
+            # 17. the hash is checked before a setup window opens
+            $bad = Get-Content C:\ftest\www\setup\manifest\iiii4444 -Raw | ConvertFrom-Json; $bad.apps[0].sha256 = ('0' * 64); $bad.code = 'iiii7777'
+            $bad | ConvertTo-Json -Depth 5 | Set-Content C:\ftest\www\setup\manifest\iiii7777 -Encoding utf8
+            $out = Inst $installer ($common + @('-code','iiii7777')); $c17 = $script:LASTEXIT
+            Check 'interactive: a wrong hash is refused before any setup window opens' ($c17 -eq 1 -and $out -match 'mismatch' -and $out -notmatch 'yourturn') "exit $c17"
+
+            # 18a. a setup that installs, launches the app and exits: its job never empties, so the installer must go on (Done) after a short grace, and NOT kill the app
+            Get-Process -Name 'int-linger' -ErrorAction SilentlyContinue | Stop-Process -Force
+            $p = Start-Inst 'iiii8888' 'case18a-linger'
+            $ended = $p.WaitForExit(120000)
+            $alive = @(Get-Process -Name 'int-linger' -ErrorAction SilentlyContinue).Count
+            Get-Process -Name 'int-linger' -ErrorAction SilentlyContinue | Stop-Process -Force
+            Check 'interactive: a setup that leaves the launched app running is Done, and the app is not killed' ($ended -and $p.ExitCode -eq 0 -and ((Get-Content C:\ftest\out\case18a-linger.txt -Raw) -match 'done') -and $alive -ge 1) "ended: $ended, app still running: $alive"
+
+            # 18b. hand-off: the elevated copy writes its window's address to the file it was given
+            Remove-Item C:\ftest\h.txt -ErrorAction SilentlyContinue
+            $out = Inst $installer ($common + @('-code','aaaa1111','-handoff','C:\ftest\h.txt')); $c18b = $script:LASTEXIT
+            $h = Get-Content C:\ftest\h.txt -Raw -ErrorAction SilentlyContinue
+            Check 'hand-off: the elevated copy writes its own window address' ($c18b -eq 0 -and $h -match '^http://127\.0\.0\.1:\d+/t/[0-9a-f]+/$') "exit $c18b, address: $h"
+
+            # 18c. the window's own buttons on a portable row (Run as the user, Move…) and Stop on an open setup, through the window's local address
+            Remove-Item "$apps\Test Marker", C:\ftest\moveto, C:\ftest\run-marker.txt -Recurse -Force -ErrorAction SilentlyContinue
+            New-Item -ItemType Directory -Force C:\ftest\moveto | Out-Null
+            $env:FILEION_INSTALLER_TEST_PICK = 'C:\ftest\moveto'
+            $p = Start-Inst 'mmmm1111' 'case18c-buttons'
+            $turn = Wait-Log 'yourturn' 60
+            $url = Window-Url
+            Invoke-WebRequest "${url}row/run?i=0" -Method Post -UseBasicParsing | Out-Null
+            $end = (Get-Date).AddSeconds(30); while (-not (Test-Path C:\ftest\run-marker.txt) -and (Get-Date) -lt $end) { Start-Sleep -Milliseconds 300 }
+            $level = Get-Content C:\ftest\run-marker.txt -Raw -ErrorAction SilentlyContinue
+            Check 'Run starts a portable app as the normal user, not as administrator' ($turn -and $level -eq 'medium') "started at the $level level"
+            Invoke-WebRequest "${url}row/move?i=0" -Method Post -UseBasicParsing | Out-Null
+            $end = (Get-Date).AddSeconds(30); while (-not (Test-Path 'C:\ftest\moveto\Test Marker\run-marker.exe') -and (Get-Date) -lt $end) { Start-Sleep -Milliseconds 300 }
+            $listed = Select-String -Path "$env:LOCALAPPDATA\Fileion\portable.json" -Pattern 'moveto' -Quiet
+            Check 'Move puts the app in the chosen folder and the list follows it' ((Test-Path 'C:\ftest\moveto\Test Marker\run-marker.exe') -and -not (Test-Path "$apps\Test Marker") -and $listed) "moved: $(Test-Path 'C:\ftest\moveto\Test Marker\run-marker.exe'), listed: $listed"
+            Remove-Item Env:FILEION_INSTALLER_TEST_PICK -ErrorAction SilentlyContinue
+            Invoke-WebRequest "${url}stop" -Method Post -UseBasicParsing | Out-Null
+            $ended = $p.WaitForExit(30000)
+            $left = @(Get-Process -Name 'int-hang' -ErrorAction SilentlyContinue).Count
+            Check 'Stop ends an open setup, says Stopped and leaves nothing running' ($ended -and $p.ExitCode -eq 0 -and ((Get-Content C:\ftest\out\case18c-buttons.txt -Raw) -match 'cancelled') -and $left -eq 0) "ended: $ended, processes left: $left"
+            Remove-Item Env:FILEION_INSTALLER_ELEVATED -ErrorAction SilentlyContinue
+          }
+
+          # 18. an older installer (the published release) against the new modes: it runs only the silent row and starts nothing else
+          if ('${{ inputs.release_tag }}' -ne '') {
+            $env:FILEION_INSTALLER_ELEVATED = '1'
+            $dl = [Environment]::ExpandEnvironmentVariables((Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders').'{374DE290-123F-4565-9164-39C4925E467B}')
+            Remove-Item "$dl\Fileion Apps" -Recurse -Force -ErrorAction SilentlyContinue
+            $out = Inst $installer ($common + @('-code','oooo6666')); $c18 = $script:LASTEXIT
+            $out | Set-Content C:\ftest\out\case18-old-installer.txt
+            $skipped = ([regex]::Matches($out, 'unsupported')).Count
+            Check 'older installer: portable, zip and interactive rows are not run, the silent row is' ($skipped -eq 3 -and (Key '{FILEION-TEST-OLD}') -and -not (Key '{FILEION-INT-OK}') -and -not (Test-Path "$dl\Fileion Apps") -and -not (Get-Process -Name fakeapp, int-ok -ErrorAction SilentlyContinue)) "unsupported rows: $skipped, silent installed: $(Key '{FILEION-TEST-OLD}')"
+            Remove-Item Env:FILEION_INSTALLER_ELEVATED -ErrorAction SilentlyContinue
+          }
+
+          "### v0.3.0 cases`n| Case | Result | Detail |`n|---|---|---|`n$($rows -join "`n")" | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          if ($fail.Count) { Write-Error "Failed: $($fail -join '; ')"; exit 1 }
+      - name: Run the cases
+        if: always()
+        continue-on-error: true
+        timeout-minutes: 25
+        run: |
+          # started in this step: a process left running by an earlier step is cleaned up when that step ends
+          Start-Process C:\ftest\testserver.exe -ArgumentList '-addr','127.0.0.1:8443','-dir','C:\ftest\www','-cert','C:\ftest\cert.pem','-key','C:\ftest\key.pem' -RedirectStandardError C:\ftest\out\server.log -WindowStyle Hidden
+          Start-Sleep 3
+          $ErrorActionPreference = 'Continue'
+          # A GUI program: `&` does not wait for it and gives no exit code, so every run goes through Start-Process -Wait with its output in files
+          # Every run has a time limit (the process tree is killed and the case is marked TIMEOUT with its name), and the step records the case it is on.
+          $script:Started = @()
+          function Reap { foreach ($q in $script:Started) { if (-not $q.HasExited) { taskkill /T /F /PID $q.Id | Out-Null } }; $script:Started = @() }
+          function Inst($exe, [string[]]$a, [int]$limit = 240) {
+            Reap
+            $o = 'C:\ftest\out\_o.txt'; $e = 'C:\ftest\out\_e.txt'
+            Remove-Item $o, $e -ErrorAction SilentlyContinue
+            "$(Get-Date -Format o) Inst $a" | Add-Content C:\ftest\out\progress.txt
+            $p = Start-Process -FilePath $exe -ArgumentList $a -PassThru -RedirectStandardOutput $o -RedirectStandardError $e -WindowStyle Hidden
+            $null = $p.Handle
+            if (-not $p.WaitForExit($limit * 1000)) {
+              taskkill /T /F /PID $p.Id | Out-Null
+              $script:rows += "| TIMEOUT: $a | FAIL | no exit after $limit s, process tree killed |"; $script:fail += "TIMEOUT: $a"
+              $script:LASTEXIT = -1
+            } else { $script:LASTEXIT = $p.ExitCode }
+            (Get-Content $o -Raw -ErrorAction SilentlyContinue) + (Get-Content $e -Raw -ErrorAction SilentlyContinue)
+          }
+          $fail = @()
+          $rows = @()
+          function Key($code) { Test-Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$code" }
+          function Check($name, $ok, $detail) {
+            $script:rows += "| $name | $(if ($ok) {'PASS'} else {'FAIL'}) | $detail |"
+            if (-not $ok) { $script:fail += $name }
+          }
+          reg delete "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{FILEION-TEST-1}" /f 2>$null | Out-Null
           $installer = 'C:\ftest\Fileion-Test-and-1-more-aaaa1111.exe'
           $env:FILEION_INSTALLER_ELEVATED = '1'   # the runner is already an administrator: skip the permission prompt
           $common = @('-base', 'https://127.0.0.1:8443', '-no-window', '-no-report')
@@ -252,150 +426,11 @@ jobs:
           Copy-Item "$env:RUNNER_TEMP\fileion-installer.log" C:\ftest\out\installer.log -ErrorAction SilentlyContinue
           "### Installer cases`n| Case | Result | Detail |`n|---|---|---|`n$($rows -join "`n")" | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           if ($fail.Count) { Write-Error "Failed: $($fail -join '; ')"; exit 1 }
-      - name: Run the v0.3.0 cases
+      - name: Collect the installer logs
         if: always()
         run: |
-          # started in this step: a process left running by an earlier step is cleaned up when that step ends
-          Start-Process C:\ftest\testserver.exe -ArgumentList '-addr','127.0.0.1:8443','-dir','C:\ftest\www','-cert','C:\ftest\cert.pem','-key','C:\ftest\key.pem' -RedirectStandardError C:\ftest\out\server.log -WindowStyle Hidden
-          Start-Sleep 3
-          $ErrorActionPreference = 'Continue'
-          # A GUI program: `&` does not wait for it and gives no exit code, so every run goes through Start-Process -Wait with its output in files
-          function Inst($exe, [string[]]$a) {
-            $o = 'C:\ftest\out\_o.txt'; $e = 'C:\ftest\out\_e.txt'
-            Remove-Item $o, $e -ErrorAction SilentlyContinue
-            $p = Start-Process -FilePath $exe -ArgumentList $a -Wait -PassThru -RedirectStandardOutput $o -RedirectStandardError $e -WindowStyle Hidden
-            $script:LASTEXIT = $p.ExitCode
-            (Get-Content $o -Raw -ErrorAction SilentlyContinue) + (Get-Content $e -Raw -ErrorAction SilentlyContinue)
-          }
-          $fail = @()
-          $rows = @()
-          function Key($code) { Test-Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$code" }
-          function Check($name, $ok, $detail) {
-            $script:rows += "| $name | $(if ($ok) {'PASS'} else {'FAIL'}) | $detail |"
-            if (-not $ok) { $script:fail += $name }
-          }
-          $installer = 'C:\ftest\Fileion-Test-and-1-more-aaaa1111.exe'
-          $env:FILEION_INSTALLER_ELEVATED = '1'   # the runner is already an administrator: skip the permission prompt
-          $common = @('-base', 'https://127.0.0.1:8443', '-no-window', '-no-report')
-
-          # 11-17. v0.3.0 (a fresh build only: an older installer does not know these modes; the published-release run has the old-installer case below)
-          if ('${{ inputs.release_tag }}' -eq '') {
-            $env:FILEION_INSTALLER_ELEVATED = '1'
-            $dl = [Environment]::ExpandEnvironmentVariables((Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders').'{374DE290-123F-4565-9164-39C4925E467B}')
-            $apps = Join-Path $dl 'Fileion Apps'
-            $log = Join-Path $env:TEMP 'fileion-installer.log'
-            $un = 'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall'
-            function Wait-Log($pattern, $secs) { $end = (Get-Date).AddSeconds($secs); while ((Get-Date) -lt $end) { if ((Get-Content $log -Raw -ErrorAction SilentlyContinue) -match $pattern) { return $true }; Start-Sleep -Milliseconds 300 }; $false }
-            function Start-Inst($code, $name) { Remove-Item $log -ErrorAction SilentlyContinue; Start-Process $installer -ArgumentList ($common + @('-code', $code)) -PassThru -WindowStyle Hidden -RedirectStandardOutput "C:\ftest\out\$name.txt" }
-            function Window-Url { ([regex]::Match((Get-Content $log -Raw), 'window: (http://127\.0\.0\.1:\d+/t/[0-9a-f]+/)')).Groups[1].Value }
-
-            # 11. no console window: a GUI program (PE subsystem 2) with no console child while it works
-            $bytes = [IO.File]::ReadAllBytes($installer); $pe = [BitConverter]::ToInt32($bytes, 60); $sub = [BitConverter]::ToUInt16($bytes, $pe + 92)
-            $p = Start-Inst 'cccc3333' 'case11-noconsole'
-            Start-Sleep 5
-            $con = @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$($p.Id)" | Where-Object { $_.Name -eq 'conhost.exe' }).Count
-            taskkill /T /F /PID $p.Id | Out-Null; Stop-Process -Name fakeapp -Force -ErrorAction SilentlyContinue
-            Check 'no console window: GUI subsystem, no console host under the installer' ($sub -eq 2 -and $con -eq 0) "PE subsystem $sub, console hosts: $con"
-
-            # 12. portable: saved in its own folder under Downloads, not run, listed; the next run skips it
-            Remove-Item $apps -Recurse -Force -ErrorAction SilentlyContinue; Remove-Item "$env:LOCALAPPDATA\Fileion\portable.json" -ErrorAction SilentlyContinue
-            $out = Inst $installer ($common + @('-code','pppp1111')); $c12 = $script:LASTEXIT
-            $out | Set-Content C:\ftest\out\case12a-portable.txt
-            Check 'portable: saved in Downloads\Fileion Apps\<App>, not run' ($c12 -eq 0 -and $out -match 'saved' -and (Test-Path "$apps\Test Portable\fakeapp.exe") -and -not (Get-Process -Name fakeapp -ErrorAction SilentlyContinue)) "exit $c12"
-            $out = Inst $installer ($common + @('-code','pppp1111')); $c12b = $script:LASTEXIT
-            Check 'portable: the next run finds it in portable.json and skips it' ($c12b -eq 0 -and $out -match 'up-to-date' -and (Select-String -Path "$env:LOCALAPPDATA\Fileion\portable.json" -Pattern 'Test.11' -Quiet)) "exit $c12b"
-
-            # 13. zip: verified, unpacked into its folder, the zip deleted
-            $out = Inst $installer ($common + @('-code','zzzz2222')); $c13 = $script:LASTEXIT
-            $out | Set-Content C:\ftest\out\case13-zip.txt
-            $zipsLeft = @(Get-ChildItem $env:TEMP -Filter 'fileion-*.zip' -ErrorAction SilentlyContinue).Count
-            Check 'zip: unpacked into its folder and the zip is deleted' ($c13 -eq 0 -and $out -match 'saved' -and (Test-Path "$apps\Test Zip\tool.exe") -and $zipsLeft -eq 0) "exit $c13, zips left: $zipsLeft"
-
-            # 14. interactive: runs after the silent app; the setup starts the real setup and exits (the whole process tree is waited for); the person finishes it
-            Remove-Item C:\ftest\marker-ok -ErrorAction SilentlyContinue; reg delete "HKLM\$un\{FILEION-INT-OK}" /f 2>$null | Out-Null
-            $p = Start-Inst 'iiii3333' 'case14-interactive'
-            $turn = Wait-Log 'yourturn' 60
-            $early = (Get-Content $log -Raw) -notmatch 'Test Interactive: done'
-            New-Item C:\ftest\marker-ok -ItemType File -Force | Out-Null   # the person finishes the setup
-            $ended = $p.WaitForExit(60000)
-            $lg = Get-Content $log -Raw -ErrorAction SilentlyContinue
-            $order = $lg.IndexOf('Test Silent Last: done') -ge 0 -and $lg.IndexOf('Test Silent Last: done') -lt $lg.IndexOf('Test Interactive: yourturn')
-            Check 'interactive: runs last, waits for the whole setup, then Done' ($turn -and $early -and $ended -and $order -and $p.ExitCode -eq 0 -and (Key '{FILEION-INT-OK}')) "your turn: $turn, ended: $ended, order ok: $order, key: $(Key '{FILEION-INT-OK}')"
-
-            # 15. interactive, setup closed without installing: Not finished; Skip (POST on the window's address) moves on, nothing is a failure
-            $p = Start-Inst 'iiii4444' 'case15-closed'
-            $nf = Wait-Log 'notfinished' 60
-            $url = Window-Url
-            if ($url) { Invoke-WebRequest "${url}row/skip?i=0" -Method Post -UseBasicParsing | Out-Null }
-            $ended = $p.WaitForExit(30000)
-            Check 'interactive: setup closed early is Not finished, Skip ends it, no failure' ($nf -and $ended -and $p.ExitCode -eq 0 -and ((Get-Content C:\ftest\out\case15-closed.txt -Raw) -match 'skipped')) "not finished: $nf, ended: $ended"
-
-            # 16. interactive setup that never returns: Skip ends the whole job, nothing is left running
-            $p = Start-Inst 'iiii5555' 'case16-hang'
-            $turn = Wait-Log 'yourturn' 60
-            $url = Window-Url
-            if ($url) { Invoke-WebRequest "${url}row/skip?i=0" -Method Post -UseBasicParsing | Out-Null }
-            $ended = $p.WaitForExit(30000)
-            $left = @(Get-Process -Name 'int-hang' -ErrorAction SilentlyContinue).Count
-            Check 'interactive: Skip ends a setup that never returns' ($turn -and $ended -and $left -eq 0) "ended: $ended, processes left: $left"
-
-            # 17. the hash is checked before a setup window opens
-            $bad = Get-Content C:\ftest\www\setup\manifest\iiii4444 -Raw | ConvertFrom-Json; $bad.apps[0].sha256 = ('0' * 64); $bad.code = 'iiii7777'
-            $bad | ConvertTo-Json -Depth 5 | Set-Content C:\ftest\www\setup\manifest\iiii7777 -Encoding utf8
-            $out = Inst $installer ($common + @('-code','iiii7777')); $c17 = $script:LASTEXIT
-            Check 'interactive: a wrong hash is refused before any setup window opens' ($c17 -eq 1 -and $out -match 'mismatch' -and $out -notmatch 'yourturn') "exit $c17"
-
-            # 18a. a setup that installs, launches the app and exits: its job never empties, so the installer must go on (Done) after a short grace, and NOT kill the app
-            Get-Process -Name 'int-linger' -ErrorAction SilentlyContinue | Stop-Process -Force
-            $p = Start-Inst 'iiii8888' 'case18a-linger'
-            $ended = $p.WaitForExit(120000)
-            $alive = @(Get-Process -Name 'int-linger' -ErrorAction SilentlyContinue).Count
-            Get-Process -Name 'int-linger' -ErrorAction SilentlyContinue | Stop-Process -Force
-            Check 'interactive: a setup that leaves the launched app running is Done, and the app is not killed' ($ended -and $p.ExitCode -eq 0 -and ((Get-Content C:\ftest\out\case18a-linger.txt -Raw) -match 'done') -and $alive -ge 1) "ended: $ended, app still running: $alive"
-
-            # 18b. hand-off: the elevated copy writes its window's address to the file it was given
-            Remove-Item C:\ftest\h.txt -ErrorAction SilentlyContinue
-            $out = Inst $installer ($common + @('-code','aaaa1111','-handoff','C:\ftest\h.txt')); $c18b = $script:LASTEXIT
-            $h = Get-Content C:\ftest\h.txt -Raw -ErrorAction SilentlyContinue
-            Check 'hand-off: the elevated copy writes its own window address' ($c18b -eq 0 -and $h -match '^http://127\.0\.0\.1:\d+/t/[0-9a-f]+/$') "exit $c18b, address: $h"
-
-            # 18c. the window's own buttons on a portable row (Run as the user, Move…) and Stop on an open setup, through the window's local address
-            Remove-Item "$apps\Test Marker", C:\ftest\moveto, C:\ftest\run-marker.txt -Recurse -Force -ErrorAction SilentlyContinue
-            New-Item -ItemType Directory -Force C:\ftest\moveto | Out-Null
-            $env:FILEION_INSTALLER_TEST_PICK = 'C:\ftest\moveto'
-            $p = Start-Inst 'mmmm1111' 'case18c-buttons'
-            $turn = Wait-Log 'yourturn' 60
-            $url = Window-Url
-            Invoke-WebRequest "${url}row/run?i=0" -Method Post -UseBasicParsing | Out-Null
-            $end = (Get-Date).AddSeconds(30); while (-not (Test-Path C:\ftest\run-marker.txt) -and (Get-Date) -lt $end) { Start-Sleep -Milliseconds 300 }
-            $level = Get-Content C:\ftest\run-marker.txt -Raw -ErrorAction SilentlyContinue
-            Check 'Run starts a portable app as the normal user, not as administrator' ($turn -and $level -eq 'medium') "started at the $level level"
-            Invoke-WebRequest "${url}row/move?i=0" -Method Post -UseBasicParsing | Out-Null
-            $end = (Get-Date).AddSeconds(30); while (-not (Test-Path 'C:\ftest\moveto\Test Marker\run-marker.exe') -and (Get-Date) -lt $end) { Start-Sleep -Milliseconds 300 }
-            $listed = Select-String -Path "$env:LOCALAPPDATA\Fileion\portable.json" -Pattern 'moveto' -Quiet
-            Check 'Move puts the app in the chosen folder and the list follows it' ((Test-Path 'C:\ftest\moveto\Test Marker\run-marker.exe') -and -not (Test-Path "$apps\Test Marker") -and $listed) "moved: $(Test-Path 'C:\ftest\moveto\Test Marker\run-marker.exe'), listed: $listed"
-            Remove-Item Env:FILEION_INSTALLER_TEST_PICK -ErrorAction SilentlyContinue
-            Invoke-WebRequest "${url}stop" -Method Post -UseBasicParsing | Out-Null
-            $ended = $p.WaitForExit(30000)
-            $left = @(Get-Process -Name 'int-hang' -ErrorAction SilentlyContinue).Count
-            Check 'Stop ends an open setup, says Stopped and leaves nothing running' ($ended -and $p.ExitCode -eq 0 -and ((Get-Content C:\ftest\out\case18c-buttons.txt -Raw) -match 'cancelled') -and $left -eq 0) "ended: $ended, processes left: $left"
-            Remove-Item Env:FILEION_INSTALLER_ELEVATED -ErrorAction SilentlyContinue
-          }
-
-          # 18. an older installer (the published release) against the new modes: it runs only the silent row and starts nothing else
-          if ('${{ inputs.release_tag }}' -ne '') {
-            $env:FILEION_INSTALLER_ELEVATED = '1'
-            $dl = [Environment]::ExpandEnvironmentVariables((Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders').'{374DE290-123F-4565-9164-39C4925E467B}')
-            Remove-Item "$dl\Fileion Apps" -Recurse -Force -ErrorAction SilentlyContinue
-            $out = Inst $installer ($common + @('-code','oooo6666')); $c18 = $script:LASTEXIT
-            $out | Set-Content C:\ftest\out\case18-old-installer.txt
-            $skipped = ([regex]::Matches($out, 'unsupported')).Count
-            Check 'older installer: portable, zip and interactive rows are not run, the silent row is' ($skipped -eq 3 -and (Key '{FILEION-TEST-OLD}') -and -not (Key '{FILEION-INT-OK}') -and -not (Test-Path "$dl\Fileion Apps") -and -not (Get-Process -Name fakeapp, int-ok -ErrorAction SilentlyContinue)) "unsupported rows: $skipped, silent installed: $(Key '{FILEION-TEST-OLD}')"
-            Remove-Item Env:FILEION_INSTALLER_ELEVATED -ErrorAction SilentlyContinue
-          }
-
-          "### v0.3.0 cases`n| Case | Result | Detail |`n|---|---|---|`n$($rows -join "`n")" | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
-          if ($fail.Count) { Write-Error "Failed: $($fail -join '; ')"; exit 1 }
+          foreach ($f in "$env:RUNNER_TEMP\fileion-installer.log", "$env:TEMP\fileion-installer.log", 'C:\ftest\tmp\fileion-installer.log') { if (Test-Path $f) { Copy-Item $f ("C:\ftest\out\" + ($f -replace '[:\\]','_')) -ErrorAction SilentlyContinue } }
+          Get-ChildItem "$env:LOCALAPPDATA\Fileion" -ErrorAction SilentlyContinue | ForEach-Object { Copy-Item $_.FullName C:\ftest\out\ -Recurse -ErrorAction SilentlyContinue }
       - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
         if: always()
         with:
@@ -405,7 +440,7 @@ jobs:
   wait-detect:
     # the friend-PC bug: Notepad++ and VLC stayed on "Installing" although they were installed. A fresh build runs the real vendor installers
     # (x64, also on the Windows 11 ARM runner, where the x64 exe runs under emulation) and must finish with the app detected, in a sane time.
-    if: inputs.release_tag == '' && inputs.set_code == ''
+    if: inputs.release_tag == '' && inputs.set_code == '' && !inputs.only_installer
     strategy:
       fail-fast: false
       matrix:
@@ -686,7 +721,7 @@ jobs:
           name: live-cases
           path: C:\ftest\out\
   plan:
-    if: inputs.release_tag == ''
+    if: inputs.release_tag == '' && !inputs.only_installer
     runs-on: ubuntu-24.04
     outputs:
       apps: ${{ steps.list.outputs.apps }}
@@ -773,7 +808,7 @@ jobs:
           if-no-files-found: warn
   report:
     needs: type-default
-    if: always() && inputs.release_tag == ''
+    if: always() && inputs.release_tag == '' && !inputs.only_installer
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
