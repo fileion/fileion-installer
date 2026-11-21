@@ -249,6 +249,35 @@ jobs:
           }
 
 
+          Copy-Item "$env:RUNNER_TEMP\fileion-installer.log" C:\ftest\out\installer.log -ErrorAction SilentlyContinue
+          "### Installer cases`n| Case | Result | Detail |`n|---|---|---|`n$($rows -join "`n")" | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          if ($fail.Count) { Write-Error "Failed: $($fail -join '; ')"; exit 1 }
+      - name: Run the v0.3.0 cases
+        if: always()
+        run: |
+          # started in this step: a process left running by an earlier step is cleaned up when that step ends
+          Start-Process C:\ftest\testserver.exe -ArgumentList '-addr','127.0.0.1:8443','-dir','C:\ftest\www','-cert','C:\ftest\cert.pem','-key','C:\ftest\key.pem' -RedirectStandardError C:\ftest\out\server.log -WindowStyle Hidden
+          Start-Sleep 3
+          $ErrorActionPreference = 'Continue'
+          # A GUI program: `&` does not wait for it and gives no exit code, so every run goes through Start-Process -Wait with its output in files
+          function Inst($exe, [string[]]$a) {
+            $o = 'C:\ftest\out\_o.txt'; $e = 'C:\ftest\out\_e.txt'
+            Remove-Item $o, $e -ErrorAction SilentlyContinue
+            $p = Start-Process -FilePath $exe -ArgumentList $a -Wait -PassThru -RedirectStandardOutput $o -RedirectStandardError $e -WindowStyle Hidden
+            $script:LASTEXIT = $p.ExitCode
+            (Get-Content $o -Raw -ErrorAction SilentlyContinue) + (Get-Content $e -Raw -ErrorAction SilentlyContinue)
+          }
+          $fail = @()
+          $rows = @()
+          function Key($code) { Test-Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$code" }
+          function Check($name, $ok, $detail) {
+            $script:rows += "| $name | $(if ($ok) {'PASS'} else {'FAIL'}) | $detail |"
+            if (-not $ok) { $script:fail += $name }
+          }
+          $installer = 'C:\ftest\Fileion-Test-and-1-more-aaaa1111.exe'
+          $env:FILEION_INSTALLER_ELEVATED = '1'   # the runner is already an administrator: skip the permission prompt
+          $common = @('-base', 'https://127.0.0.1:8443', '-no-window', '-no-report')
+
           # 11-17. v0.3.0 (a fresh build only: an older installer does not know these modes; the published-release run has the old-installer case below)
           if ('${{ inputs.release_tag }}' -eq '') {
             $env:FILEION_INSTALLER_ELEVATED = '1'
@@ -365,8 +394,7 @@ jobs:
             Remove-Item Env:FILEION_INSTALLER_ELEVATED -ErrorAction SilentlyContinue
           }
 
-          Copy-Item "$env:RUNNER_TEMP\fileion-installer.log" C:\ftest\out\installer.log -ErrorAction SilentlyContinue
-          "### Installer cases`n| Case | Result | Detail |`n|---|---|---|`n$($rows -join "`n")" | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          "### v0.3.0 cases`n| Case | Result | Detail |`n|---|---|---|`n$($rows -join "`n")" | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           if ($fail.Count) { Write-Error "Failed: $($fail -join '; ')"; exit 1 }
       - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
         if: always()
