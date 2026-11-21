@@ -26,7 +26,7 @@ var page []byte
 //go:embed icon-32.png icon-64.png icon-192.png icon-512.png
 var icons embed.FS
 
-const manifestJSON = `{"name":"Fileion Installer","short_name":"Fileion Installer","start_url":"./","display":"standalone","background_color":"#ffffff","theme_color":"#2563eb",` +
+const manifestJSON = `{"name":"Fileion Installer","short_name":"Fileion Installer","start_url":"./","display":"standalone","background_color":"#ffffff","theme_color":"#ffffff",` +
 	`"icons":[{"src":"icon-192.png","sizes":"192x192","type":"image/png"},{"src":"icon-512.png","sizes":"512x512","type":"image/png"}]}`
 
 // Row is one app in the list.
@@ -42,6 +42,7 @@ type Row struct {
 	Folder  string `json:"folder,omitempty"` // where a portable app or a zip is (the full path)
 	CanRun  bool   `json:"canRun,omitempty"` // a program to Run is known (a portable app, or a zip whose program is known)
 	InStart bool   `json:"inStart,omitempty"`
+	Icon    string `json:"icon,omitempty"` // the app's logo on a fileion.com address (see SafeIcon); the page draws nothing when it is empty or fails to load
 }
 
 // State is what the page polls.
@@ -163,7 +164,7 @@ func (s *Server) index(base string) http.HandlerFunc {
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; img-src 'self'; manifest-src 'self'")
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; img-src 'self' https://*.fileion.com; manifest-src 'self'")
 		w.Write(page)
 	}
 }
@@ -483,4 +484,16 @@ func safeLink(l string) string {
 		return l
 	}
 	return ""
+}
+
+// SafeIcon returns the manifest's icon address when it is https on fileion.com or a subdomain of it, else "": the window never loads an image from anywhere else.
+func SafeIcon(raw string) string {
+	u, err := neturl.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Scheme != "https" || u.User != nil || len(raw) > 600 {
+		return ""
+	}
+	if h := strings.ToLower(u.Hostname()); h != "fileion.com" && !strings.HasSuffix(h, ".fileion.com") {
+		return ""
+	}
+	return u.String()
 }

@@ -163,9 +163,13 @@ func main() {
 	}
 	win.SetApps(names)
 	for i, a := range m.Apps {
-		if k := a.EffectiveMode(); k == manifest.ModePortable || k == manifest.ModeZip || k == manifest.ModeInteractive {
-			win.Mutate(i, func(r *ui.Row) { r.Kind = k })
-		}
+		k, icon := a.EffectiveMode(), ui.SafeIcon(a.Icon)
+		win.Mutate(i, func(r *ui.Row) {
+			r.Icon = icon
+			if k == manifest.ModePortable || k == manifest.ModeZip || k == manifest.ModeInteractive {
+				r.Kind = k
+			}
+		})
 	}
 	if len(m.Apps) == 0 {
 		win.Note("None of the apps in this list can be installed unattended. Get them from their Fileion pages.")

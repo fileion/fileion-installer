@@ -197,7 +197,7 @@ func OpenWindow(url string) error {
 	for _, edge := range []string{os.Getenv("ProgramFiles(x86)") + `\Microsoft\Edge\Application\msedge.exe`, os.Getenv("ProgramFiles") + `\Microsoft\Edge\Application\msedge.exe`} {
 		if _, err := os.Stat(edge); err == nil {
 			// Its own profile: in the person's default one Edge restores the window size it saved from older runs and ignores --window-size
-			args := []string{"--app=" + url, "--window-size=720,330", "--no-first-run", "--no-default-browser-check"}
+			args := []string{"--app=" + url, "--window-size=420,260", "--no-first-run", "--no-default-browser-check"}
 			if lad := os.Getenv("LOCALAPPDATA"); lad != "" {
 				args = append(args, "--user-data-dir="+filepath.Join(lad, "Fileion", "window"))
 			}

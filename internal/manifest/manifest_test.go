@@ -163,3 +163,10 @@ func TestModesAreReadOrderedForTheRunAndAnEmptyModeIsSilent(t *testing.T) {
 		t.Fatalf("order %s, want BCDA (interactive last)", names)
 	}
 }
+
+func TestAnUnknownFieldIsIgnoredAndTheIconIsRead(t *testing.T) {
+	m, err := Parse(strings.NewReader(`{"code":"aaaa1111","os":"windows","apps":[{"id":1,"name":"A","url":"https://v.example/a.exe","sha256":"abababababababababababababababababababababababababababababababab","icon":"https://fileion.com/a.png","future_field":{"x":1}}]}`), "windows")
+	if err != nil || m.Apps[0].Icon != "https://fileion.com/a.png" {
+		t.Fatalf("err %v, apps %+v", err, m.Apps)
+	}
+}
