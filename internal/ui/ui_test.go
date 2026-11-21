@@ -400,3 +400,20 @@ func TestRedirectParsesTheAddressAndReopenForgetsAStop(t *testing.T) {
 		t.Fatal("not polled after a request for the state")
 	}
 }
+
+func TestStopMakesEveryAppNotYetStartedNotRunAtOnceAndLeavesTheRunningOne(t *testing.T) {
+	s, _, err := New(t.TempDir()+"/log", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SetApps([]string{"A", "B", "C"})
+	s.Update(0, "installing", "Installing", "")
+	s.Stop()
+	if !s.Stopping() {
+		t.Fatal("not stopping")
+	}
+	got := []string{s.state.Rows[0].Status, s.state.Rows[1].Status, s.state.Rows[2].Status}
+	if got[0] != "installing" || got[1] != "notrun" || got[2] != "notrun" {
+		t.Fatalf("rows after Stop: %v", got)
+	}
+}

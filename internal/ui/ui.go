@@ -335,6 +335,11 @@ func (s *Server) Ask(ctx context.Context, i int) string {
 func (s *Server) Stop() {
 	s.mu.Lock()
 	s.state.Stopping = true
+	for i := range s.state.Rows { // every app not yet started is "Not run" at once
+		if r := &s.state.Rows[i]; r.Status == "queued" {
+			r.Status, r.Message, r.Since = "notrun", "Not run", time.Now().UnixMilli()
+		}
+	}
 	for i, c := range s.armed {
 		close(c)
 		delete(s.armed, i)
