@@ -9,10 +9,10 @@ A small program that installs the apps you picked at [software.fileion.com/setup
 3. For each app:
    - **Windows:** skips it when it is already installed at the listed version (the product code under the Windows Uninstall registry keys; or, when the list has a name rule, an Uninstall entry whose DisplayName starts with the rule and whose Publisher is equal, in HKLM 64-bit, HKLM 32-bit or HKCU; an older version is updated, a version that cannot be read is updated too); otherwise downloads the file **from the vendor's own https address only**, checks its SHA-256 against the vendor's, and runs it with the silent switch. If the SHA-256 does not match, the file is **not run**, it is deleted and the window says so.
    - **Linux:** installs it from Flathub with Flatpak, or updates it when Flatpak already has it.
-4. Shows a plain progress window: one line per app, a link to the log, a Close button and a Privacy link.
+4. Shows a plain progress window: one line per app with its download progress (MB and percent) or the time it has been installing, an "N of M" total, a link that opens the log, a Close button and a Privacy link. If the installer itself stops, the window says so and shows where the log is.
 5. Sends **one anonymous count** at the end: how many apps worked and how many did not. No name, IP-linked id, app list or computer detail is sent. Tick "Don't send" in the window, or use `-no-report`, to send nothing (see Privacy).
 
-An installer that shows its own setup window or hangs is stopped after a time limit (10 minutes, `-app-timeout`) and marked "Skipped: needs manual install", with a link to the app's Fileion download page. The SHA-256 check always runs first, before anything is started.
+An installer that has no silent switch is not run, and one that does not finish within its time limit (10 minutes, `-app-timeout`) is stopped. Both are marked "Manual" with a link to that app's Fileion download page. An installer's own windows are shown, not hidden, and are never closed by the program before the time limit. If an installer seems to be waiting for you, the window says so after a minute. If the app is already installed but its own installer window stays open, the row says "its installer is still open: you can close it". The SHA-256 check always runs first, before anything is started.
 
 Run the same file again later and it updates the same apps.
 
@@ -81,6 +81,6 @@ The Windows icon and version info (Fileion mark, "Fileion Installer", the tag as
 ## Clean Windows VM test checklist
 
 1. Windows 10/11 VM, no admin user logged in is fine (the prompt appears). Download a file from the page once the switch is on, or rename a build to `Fileion-7-Zip-<code>.exe` with a real code.
-2. Run it: expect the permission prompt, then the window listing each app. Check: installed, "Up to date" on a second run, a deliberately wrong SHA-256 shows "Skipped" and nothing runs, an app with its own setup window is stopped at the limit (try `-app-timeout 30s`) with a Fileion link.
+2. Run it: expect the permission prompt, then the window listing each app. Check: installed, "Up to date" on a second run, a deliberately wrong SHA-256 shows "Skipped" and nothing runs, an installer that never finishes is stopped at the limit (try `-app-timeout 30s`) with a Fileion link; an app that installs but leaves its own installer window open is left running, with "its installer is still open: you can close it".
 3. Check `%TEMP%\fileion-installer.log`, that downloaded files are gone from `%TEMP%`, and that SmartScreen shows its "unrecognized app" warning (the build is unsigned).
 4. Edge must exist (it ships with Windows 10/11); without it the default browser opens the page.
