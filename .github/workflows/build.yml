@@ -45,7 +45,7 @@ jobs:
           [ "$(head -c2 dist/Fileion-Installer.exe)" = MZ ]
           [ "$(head -c4 dist/Fileion-Installer | tail -c3)" = ELF ]
           ! cmp -s dist/Fileion-Installer.exe dist/Fileion-Installer
-      - name: Check the .exe is a GUI program (PE subsystem 2: no console window can appear)
+      - name: "Check the .exe is a GUI program (PE subsystem 2: no console window can appear)"
         run: |
           pe=$(od -An -tu4 -j60 -N4 dist/Fileion-Installer.exe | tr -d ' ')
           sub=$(od -An -tu2 -j$((pe + 92)) -N2 dist/Fileion-Installer.exe | tr -d ' ')
