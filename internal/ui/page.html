@@ -75,7 +75,7 @@ footer a{color:var(--link)}
 <div id="top">
 <div class="head"><h1 id="h"><span id="hcheck" hidden><svg class="ic" style="width:18px;height:18px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span><svg id="stopicon" hidden viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v6M12 16.5v.5"/></svg><span id="ht">Preparing…</span></h1><span class="count" id="count" hidden></span></div>
 <div class="overall" id="overall" role="progressbar" aria-label="Overall progress" aria-valuemin="0" aria-valuemax="1" aria-valuenow="0" hidden><i></i></div>
-<div class="irow"><svg id="ick" class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" hidden><path d="M5 12.5l4.5 4.5L19 7.5"/></svg><p class="intro" id="intro" hidden></p></div>
+<div class="irow"><svg id="ick" class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" hidden><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/></svg><p class="intro" id="intro" hidden></p></div>
 <p class="intro" id="nocode" hidden><a href="https://software.fileion.com/setup" target="_blank" rel="noopener">software.fileion.com/setup</a> · <a href="https://fileion.com/installer-help" target="_blank" rel="noopener">Help</a></p>
 </div>
 <div id="scroll">
@@ -88,9 +88,7 @@ footer a{color:var(--link)}
 <div class="r"><span class="confirm" id="confirm" role="alertdialog" aria-label="Stop after the current app?" hidden><span>Stop after the current app?<span id="stopnote" hidden> Its setup window will be closed.</span></span><button id="stop" type="button">Stop</button><button id="keep" type="button" class="primary">Keep going</button></span><button id="retry" type="button" hidden><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.5-5.8M20 4v5h-5"/></svg>Retry failed apps</button><button id="close" type="button">Cancel</button></div>
 </div>
 <footer>
-<p>Sends Fileion one anonymous count (apps worked / failed) when the run ends, nothing else.</p>
-<div class="opts"><label><input type="checkbox" id="nosend"> Don't send</label><a href="https://fileion.com/privacy-policy" target="_blank" rel="noopener">Privacy</a><span class="dot" aria-hidden="true">·</span><a href="https://fileion.com/installer-help" target="_blank" rel="noopener">Help</a></div>
-<p class="note3"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 7.5v.5"/></svg>Unsigned for now: Windows SmartScreen may warn on first run.</p>
+<div class="opts"><span>Sends one anonymous count</span><span class="dot" aria-hidden="true">·</span><label><input type="checkbox" id="nosend"> Don't send</label><span class="dot" aria-hidden="true">·</span><a href="https://fileion.com/privacy-policy" target="_blank" rel="noopener">Privacy</a><span class="dot" aria-hidden="true">·</span><a href="https://fileion.com/installer-help" target="_blank" rel="noopener">Help</a></div>
 </footer>
 </div>
 <script>
@@ -176,7 +174,7 @@ function build(i,r,status){
  if(status==='yourturn'){sm('Your turn: finish '+name+'’s setup window');sm('Untick any extra offers')}
  else if(status==='notfinished')sm(r.message||'Setup window closed before the app installed');
  else if(status==='saved')sm(r.message,'sel');
- else if(status==='up-to-date')sm('Already installed, skipped');
+ else if(status==='up-to-date')sm((r.kind==='portable'||r.kind==='zip')&&r.message?r.message:'Already installed, skipped');
  else if((status==='failed'||status==='mismatch')&&r.message&&status!=='mismatch')sm(r.message);
  if(r.link&&(status==='manual'||status==='unsupported'||status==='failed'||status==='mismatch')){const a=el('a','','Download from Fileion');a.href=r.link;a.target='_blank';a.rel='noopener';addExt(a);const s=el('small');s.append(a);d.append(s)}
  R.note=null;
@@ -230,7 +228,8 @@ function render(){
  if(pv){$('ptitle').textContent=s.nocode?'No app list':'Preparing…';$('ptext').hidden=!s.nocode;$('ptext').textContent=s.note||'';$('plinks').hidden=!s.nocode;$('pbar').hidden=!!s.nocode;$('pclose').hidden=!s.nocode}
  document.body.classList.toggle('stopped',lost);
  $('stopicon').toggleAttribute('hidden',!lost);$('stopbox').hidden=!(lost&&logPath);$('log').hidden=lost||s.finished;box.disabled=lost;box.title=lost?'The installer is not running':'';
- const fin=rs.filter(r=>FINAL.has(r.status)&&r.status!=='up-to-date').length,nUtd=rs.filter(r=>r.status==='up-to-date').length; // the count leaves out the rows that were already up to date
+ const nUtd=rs.filter(r=>r.status==='up-to-date').length,n2=n-nUtd,fin=rs.filter(r=>FINAL.has(r.status)&&r.status!=='up-to-date').length; // n2: the apps that will run; up-to-date rows are listed first and not counted
+ const allUtd=n>0&&n2===0,utd=nUtd?' · '+nUtd+' up to date':'';
  const intro=$('intro'),h=$('ht'),ov=$('overall');
  $('nocode').hidden=!s.nocode;
  if(s.nocode){h.textContent='No app list';intro.hidden=false;intro.textContent=s.note;$('count').hidden=true;ov.hidden=true;document.querySelector('footer').hidden=true;$('log').hidden=true;$('list').replaceChildren();$('close').textContent='Close';fit();return}
@@ -243,17 +242,17 @@ function render(){
   ov.hidden=false;ov.className='overall ind';ov.setAttribute('aria-label','Preparing');ov.removeAttribute('aria-valuenow');
  }else{
   ov.setAttribute('aria-label','Overall progress');
-  h.textContent=s.preparing||!n?(s.finished?'Nothing was installed':'Getting your list'):s.stopping&&!s.finished?'Stopping…':!s.finished?'Installing '+n+' app'+(n==1?'':'s'):'Finished';
+  h.textContent=s.preparing||!n?(s.finished?'Nothing was installed':'Getting your list'):allUtd?'All up to date':s.stopping&&!s.finished?'Stopping…':!s.finished?'Installing '+n2+' app'+(n2==1?'':'s'):'Finished';
   intro.hidden=false;
-  intro.textContent=s.note||(s.finished?'':n?'Checked against the vendor’s SHA-256 before it runs':'Reading your list…');
-  intro.hidden=!intro.textContent;intro.classList.toggle('chk',!s.note&&!s.finished&&n>0);
+  intro.textContent=s.note||(s.finished||allUtd?'':n?'SHA-256 checked before each app runs':'Reading your list…');
+  intro.hidden=!intro.textContent;intro.classList.toggle('chk',!s.note&&!s.finished&&n2>0);
   const nr=rs.filter(r=>r.status==='notrun').length;
-  $('count').hidden=!(n-nUtd);$('count').textContent=s.finished?(s.bad||nr?[(s.ok-nUtd)+' done',s.bad?s.bad+' failed':'',nr?nr+' not run':''].filter(Boolean).join(', '):(s.ok-nUtd)+' of '+(n-nUtd)+' done'):fin+' of '+(n-nUtd);
-  $('hcheck').hidden=!(s.finished&&n);$('hcheck').style.color=s.bad||nr?'var(--skip)':'var(--ok)';
-  ov.hidden=!n;ov.setAttribute('aria-valuemax',n);ov.setAttribute('aria-valuenow',fin);ov.firstChild.style.width=(n?fin/n*100:0)+'%';
-  ov.className='overall'+(s.finished?(s.bad==0&&nr==0?' ok':' skip'):'');
+  $('count').hidden=!n;$('count').textContent=allUtd?n+' app'+(n==1?'':'s'):s.finished?(s.bad||nr?[(s.ok-nUtd)+' done',s.bad?s.bad+' failed':'',nr?nr+' not run':''].filter(Boolean).join(', '):(s.ok-nUtd)+' done')+utd:fin+' of '+n2+utd;
+  $('hcheck').hidden=!((s.finished||allUtd)&&n);$('hcheck').style.color=s.bad||nr?'var(--skip)':'var(--ok)';
+  ov.hidden=!n;ov.setAttribute('aria-valuemax',n2||1);ov.setAttribute('aria-valuenow',allUtd?1:fin);ov.firstChild.style.width=(allUtd?100:n2?fin/n2*100:0)+'%';
+  ov.className='overall'+(allUtd?' ok':s.finished?(s.bad==0&&nr==0?' ok':' skip'):'');
  }
- const done=s.finished||lost;
+ const done=s.finished||lost||(allUtd&&!s.preparing);
  $('close').textContent=done?'Close':'Cancel';$('close').disabled=!done&&!!s.stopping; // Stop is already chosen: the last setup is finishing
  $('share').hidden=!s.finished||lost;$('report').hidden=!s.finished||lost;$('logfolder').hidden=!s.finished||lost;
  $('retry').hidden=!(s.finished&&s.bad>0)||lost;$('retry').className=$('retry').hidden?'':'primary';

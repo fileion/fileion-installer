@@ -203,11 +203,16 @@ func TestTheWindowIconsAreTheExeIconAndTheManifestNamesThem(t *testing.T) {
 func TestThePageHasTheProgressAndStoppedStatesAndNoSignPath(t *testing.T) {
 	for _, want := range []string{
 		"The installer stopped", "logPath", "Copy path", // the server-gone state shows the real log path
-		"Installing…", "of '+(n-nUtd)", "nUtd", "No data for 2 minutes", "Still running", // elapsed time, overall count, the slow notes
+		"Installing…", "of '+n2", "All up to date", "SHA-256 checked before each app runs", "Sends one anonymous count", "No data for 2 minutes", "Still running", // elapsed time, overall count, the slow notes
 		"prefers-reduced-motion", "role','progressbar", "open-log",
 	} {
 		if !strings.Contains(string(page), want) {
 			t.Errorf("page.html lacks %q", want)
+		}
+	}
+	for _, gone := range []string{"SmartScreen", "Unsigned for now", "Checked against the vendor"} { // the footer is one line; SmartScreen stays on /setup
+		if strings.Contains(string(page), gone) {
+			t.Errorf("page.html still has %q", gone)
 		}
 	}
 	for _, bad := range []string{"SignPath", "signpath", "virus-free"} {

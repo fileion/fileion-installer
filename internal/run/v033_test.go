@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"fileion-installer/internal/manifest"
@@ -26,5 +27,26 @@ func TestASkippedPortableRowStillGetsItsButtons(t *testing.T) {
 	}
 	if gotFolder != folder || gotExe != filepath.Join(folder, "rufus.exe") {
 		t.Fatalf("the row was not given its buttons: %q %q", gotFolder, gotExe)
+	}
+}
+
+// Saved in its folder: current, and the line says where. Folder gone: not current, so it is downloaded again as a new app.
+func TestASavedPortableAppIsCurrentOnlyWhileItsFolderExists(t *testing.T) {
+	d := t.TempDir()
+	folder := filepath.Join(d, "Rufus")
+	os.MkdirAll(folder, 0o755)
+	st := &portable.Store{Path: filepath.Join(d, "portable.json")}
+	st.Put(portable.Entry{WingetID: "Pete.Rufus", Name: "Rufus", Version: "4.5", Folder: folder, Exe: filepath.Join(folder, "rufus.exe")})
+	r := &Runner{Portable: st}
+	a := manifest.App{Name: "Rufus", WingetID: "Pete.Rufus", Version: "4.5", Mode: manifest.ModePortable, InstallerType: "portable"}
+	if !r.Current(context.Background(), a) {
+		t.Fatal("saved and its folder is there: current")
+	}
+	if res, _ := r.pre(context.Background(), a); !strings.HasPrefix(res.Message, "Saved in ") {
+		t.Fatalf("the line must say Saved in <folder>: %q", res.Message)
+	}
+	os.RemoveAll(folder)
+	if r.Current(context.Background(), a) {
+		t.Fatal("folder gone: must be downloaded again")
 	}
 }
