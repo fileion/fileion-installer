@@ -18,7 +18,7 @@ func Exec(ctx context.Context, name string, args []string) error {
 
 func IsAdmin() bool { return true }
 
-func RelaunchAsAdmin([]string) error { return nil }
+func RelaunchAsAdmin([]string) (func() (int, error), error) { return nil, nil }
 
 func OpenWindow(url string) error { return exec.Command("open", url).Start() }
 

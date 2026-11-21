@@ -9,41 +9,49 @@
 <link rel="apple-touch-icon" href="icon-192.png">
 <link rel="manifest" href="manifest.webmanifest">
 <style>
-:root{color-scheme:light dark;--bg:#fff;--fg:#0f172a;--mut:#555;--line:#eee;--ok:#0f7b3a;--skip:#9a3412;--bad:#b42318;--link:#0067c0;--bar-bg:#e5e5e5;--bar:#0067c0;--btn-bg:#fdfdfd;--btn-bd:#ccc;--btn-fg:#111;--btn-hover:#f3f3f3;--foot:#666;--box:#f3f3f3;--prim:#0067c0;--prim-fg:#fff}
-@media(prefers-color-scheme:dark){:root{--bg:#202020;--fg:#f3f3f3;--mut:#bbb;--line:#333;--ok:#6ccb8b;--skip:#f4b183;--bad:#f87171;--link:#60cdff;--bar-bg:#444;--bar:#60cdff;--btn-bg:#333;--btn-bd:#555;--btn-fg:#fff;--btn-hover:#3d3d3d;--foot:#a0a0a0;--box:#2b2b2b;--prim:#60cdff;--prim-fg:#0b1220}}
-*{box-sizing:border-box}html{overflow-y:auto}
-body{margin:0;display:block;font:14px/1.45 "Segoe UI",system-ui,-apple-system,Roboto,"Noto Sans",Arial,sans-serif;background:var(--bg);color:var(--fg);font-variant-numeric:tabular-nums}
-main{padding:18px 20px 0}
+:root{color-scheme:light dark;--bg:#fff;--fg:#0f172a;--mut:#555;--line:#eee;--ok:#0f7b3a;--skip:#9a3412;--bad:#b42318;--link:#0067c0;--bar-bg:#e5e5e5;--bar:#0067c0;--btn-bg:#fdfdfd;--btn-bd:#ccc;--btn-fg:#111;--btn-hover:#f3f3f3;--foot:#666;--box:#f3f3f3;--prim:#0067c0;--prim-fg:#fff;--failbg:#fdecea;--turnbg:#e8f2ff;--chip:#eef2f7}
+@media(prefers-color-scheme:dark){:root{--bg:#202020;--fg:#f3f3f3;--mut:#bbb;--line:#333;--ok:#6ccb8b;--skip:#f4b183;--bad:#f87171;--link:#60cdff;--bar-bg:#444;--bar:#60cdff;--btn-bg:#333;--btn-bd:#555;--btn-fg:#fff;--btn-hover:#3d3d3d;--foot:#a0a0a0;--box:#2b2b2b;--prim:#60cdff;--prim-fg:#0b1220;--failbg:#3a1f1f;--turnbg:#12263f;--chip:#2f3640}}
+*{box-sizing:border-box}html,body{height:100%}
+body{margin:0;display:flex;flex-direction:column;overflow:hidden;font:14px/1.45 "Segoe UI",system-ui,-apple-system,Roboto,"Noto Sans",Arial,sans-serif;background:var(--bg);color:var(--fg);font-variant-numeric:tabular-nums}
+#top{flex:none;padding:18px 20px 0}
+#scroll{flex:1 1 auto;min-height:0;overflow-y:auto;padding:0 20px}
 .head{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
 h1{display:flex;align-items:center;gap:8px;font-size:16px;line-height:1.3;font-weight:700;margin:0}h1 svg{color:var(--bad);flex:none}
 .count{font-size:13px;color:var(--mut);white-space:nowrap}
 .intro{font-size:13px;line-height:1.45;color:var(--mut);margin:4px 0 8px}
 .overall{height:4px;border-radius:2px;margin:6px 0 10px;background:var(--bar-bg);overflow:hidden}.overall i{display:block;height:100%;width:0;background:var(--bar);transition:width .3s linear}
 .overall.ok i{background:var(--ok)}.overall.skip i{background:var(--skip)}
+.overall.ind i{width:40%;transition:none;animation:fi-slide 1.2s linear infinite}
 ul{list-style:none;margin:0;padding:0}
-li{display:flex;align-items:center;gap:12px;min-height:44px;padding:6px 0;border-bottom:1px solid var(--line)}
-li .name{flex:1;min-width:0}li b{font-weight:600;word-break:break-word}
-li small{display:block;font-size:12px;line-height:1.4;color:var(--mut)}li small a{color:var(--link)}
-.st{display:flex;align-items:center;white-space:nowrap;font-size:13px;color:var(--mut);justify-content:flex-end}
-.st .lbl{min-width:150px;text-align:right}.st.dl .lbl{min-width:0;margin-left:10px}
-.st.done,.st.up-to-date{color:var(--ok);font-weight:700}.st.mismatch{color:var(--skip);font-weight:700}.st.failed{color:var(--bad);font-weight:700}
-.st.manual,.st.unsupported{color:var(--link)}.st.cancelled{color:var(--mut);font-weight:700}
+li{display:flex;align-items:center;gap:12px;min-height:45px;padding:6px 0;border-bottom:1px solid var(--line)}
+li.fail{background:var(--failbg);margin:0 -20px;padding:6px 20px}li.turn{background:var(--turnbg);margin:0 -20px;padding:6px 20px}
+li .name{flex:1;min-width:0}li b{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block;max-width:100%;vertical-align:bottom}
+li small{display:block;font-size:12px;line-height:1.4;color:var(--mut)}li small a{color:var(--link)}li small.sel{user-select:text}
+.bd{display:inline-block;margin-left:8px;padding:0 7px;border-radius:9px;background:var(--chip);color:var(--mut);font-size:11px;font-weight:600;line-height:18px;vertical-align:1px}
+.acts{display:flex;flex-wrap:wrap;gap:6px;margin-top:5px;align-items:center}.acts .tag{font-size:12px;color:var(--ok);font-weight:600}
+.st{display:flex;align-items:center;white-space:nowrap;font-size:13px;color:var(--mut);justify-content:flex-end;flex:none}
+.st .lbl{min-width:0;text-align:right}.st.dl .lbl{margin-left:10px}
+.st.done,.st.up-to-date,.st.saved{color:var(--ok);font-weight:700}.st.mismatch,.st.notfinished{color:var(--skip);font-weight:700}.st.failed{color:var(--bad);font-weight:700}
+.st.manual,.st.unsupported{color:var(--link)}.st.cancelled,.st.notrun,.st.skipped{color:var(--mut);font-weight:700}
 .bar{display:inline-block;width:120px;height:6px;border-radius:3px;background:var(--bar-bg);overflow:hidden;margin-right:8px;flex:none}
 .bar.big{width:160px;margin-right:0}.bar i{display:block;height:100%;background:var(--bar);transition:width .3s linear}
 .bar.ind i{width:40%;border-radius:3px;transition:none;animation:fi-slide 1.2s linear infinite}
 @keyframes fi-slide{from{margin-left:-40%}to{margin-left:100%}}
-@media(prefers-reduced-motion:reduce){.bar.ind{display:none}.bar i,.overall i{transition:none}}
+@media(prefers-reduced-motion:reduce){.bar.ind,.overall.ind{display:none}.bar i,.overall i{transition:none}}
 .stopped ul{opacity:.65}
 .logbox{margin:12px 0 4px;font-size:12px;color:var(--mut)}
 .path{display:flex;gap:8px;align-items:center}
 .path code{flex:1;font:12px ui-monospace,"Cascadia Mono",Consolas,monospace;background:var(--box);border-radius:6px;padding:8px 10px;word-break:break-all;user-select:all;color:var(--fg)}
-.actions{margin-top:14px;padding:0 20px;display:flex;justify-content:space-between;align-items:center;gap:10px}
-.actions a{font-size:13px;color:var(--link);text-decoration:none}.actions a:hover,.actions a:focus-visible{text-decoration:underline}
+.actions{margin-top:10px;padding:0 20px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.actions .l,.actions .r{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.actions a,.linkbtn{font-size:13px;color:var(--link);text-decoration:none;background:none;border:0;padding:0;min-height:0;cursor:pointer}.actions a:hover,.actions a:focus-visible,.linkbtn:hover{text-decoration:underline}
+.confirm{display:flex;align-items:center;gap:10px;font-weight:600}
 button{font:inherit;font-size:13px;font-weight:400;min-height:34px;padding:6px 18px;border-radius:6px;border:1px solid var(--btn-bd);background:var(--btn-bg);color:var(--btn-fg);cursor:pointer}
-button:hover{background:var(--btn-hover)}button:focus-visible,a:focus-visible{outline:2px solid var(--link);outline-offset:2px}
+button.rb{min-height:30px;padding:4px 12px}button.linkbtn{border:0;background:none;color:var(--link);padding:0;min-height:0}
+button:hover{background:var(--btn-hover)}button.linkbtn:hover{background:none}button:disabled{opacity:.55;cursor:default}button:focus-visible,a:focus-visible{outline:2px solid var(--link);outline-offset:2px}
 button.primary{background:var(--prim);border-color:var(--prim);color:var(--prim-fg)}
-.dock{position:sticky;bottom:0;background:var(--bg)}
-footer{margin-top:14px;padding:10px 20px 14px;border-top:1px solid var(--line);font-size:12px;line-height:1.5;color:var(--foot)}
+#dock{flex:none;background:var(--bg)}
+footer{margin-top:10px;padding:10px 20px 14px;border-top:1px solid var(--line);font-size:12px;line-height:1.5;color:var(--foot)}
 footer p{margin:0}.opts{display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;margin:2px 0}
 .opts label{display:inline-flex;align-items:center;gap:6px;min-height:24px;color:var(--fg)}.opts input{width:16px;height:16px;margin:0}
 footer a{color:var(--link)}
@@ -51,17 +59,21 @@ footer a{color:var(--link)}
 </style>
 </head>
 <body>
-<main>
-<div class="head"><h1 id="h"><svg id="stopicon" hidden viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v6M12 16.5v.5"/></svg><span id="ht">Getting your list</span></h1><span class="count" id="count" hidden></span></div>
+<div id="top">
+<div class="head"><h1 id="h"><svg id="stopicon" hidden viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v6M12 16.5v.5"/></svg><span id="ht">Preparing…</span></h1><span class="count" id="count" hidden></span></div>
 <div class="overall" id="overall" role="progressbar" aria-label="Overall progress" aria-valuemin="0" aria-valuemax="1" aria-valuenow="0" hidden><i></i></div>
-<p class="intro" id="intro">Reading your list…</p>
+<p class="intro" id="intro" hidden></p>
 <p class="intro" id="nocode" hidden><a href="https://software.fileion.com/setup" target="_blank" rel="noopener">software.fileion.com/setup</a> · <a href="https://fileion.com/installer-help" target="_blank" rel="noopener">Help</a></p>
-<p class="intro" id="admin" hidden>Windows asks for administrator permission once, because apps are installed for everyone on this PC.</p>
+</div>
+<div id="scroll">
 <ul id="list" aria-live="polite"></ul>
 <div id="stopbox" hidden><div class="logbox">Log file</div><div class="path"><code id="logpath"></code><button id="copy" type="button">Copy path</button></div></div>
-</main>
-<div class="dock">
-<div class="actions"><a id="log" href="log" target="_blank" rel="noopener">View log</a><button id="close" type="button">Close</button></div>
+</div>
+<div id="dock">
+<div class="actions">
+<div class="l"><a id="log" href="log" target="_blank" rel="noopener">View log</a><button id="share" class="linkbtn" type="button" aria-label="Share Fileion Installer" hidden>Share Fileion Installer</button><a id="report" href="https://fileion.com/installer-help#report" target="_blank" rel="noopener" hidden>Report a problem</a><button id="logfolder" class="linkbtn" type="button" hidden>Open log folder</button></div>
+<div class="r"><span class="confirm" id="confirm" role="alertdialog" aria-label="Stop after the current app?" hidden><span>Stop after the current app?</span><button id="stop" type="button">Stop</button><button id="keep" type="button" class="primary">Keep going</button></span><button id="retry" type="button" hidden>Retry failed apps</button><button id="close" type="button">Cancel</button></div>
+</div>
 <footer>
 <p>Sends Fileion one anonymous count (apps worked / failed) when the run ends, nothing else.</p>
 <div class="opts"><label><input type="checkbox" id="nosend"> Don't send</label><a href="https://fileion.com/privacy-policy" target="_blank" rel="noopener">Privacy</a><a href="https://fileion.com/installer-help" target="_blank" rel="noopener">Help</a></div>
@@ -69,69 +81,159 @@ footer a{color:var(--link)}
 </footer>
 </div>
 <script>
-const label={queued:'Waiting',verifying:'Checking SHA-256…',done:'Done','up-to-date':'Up to date',mismatch:'Skipped: hash did not match',unsupported:'Not run',manual:'Manual',failed:'Failed',cancelled:'Stopped'};
-const FINAL=new Set(['done','up-to-date','mismatch','unsupported','manual','failed','cancelled']);
-const BUSY=new Set(['downloading','verifying','installing']);
+const LABEL={queued:'Waiting',verifying:'Verifying SHA-256…',done:'Done','up-to-date':'Up to date',mismatch:'Skipped: hash did not match',unsupported:'Not run',manual:'Manual',failed:'Failed',cancelled:'Stopped',unpacking:'Unpacking…',saved:'Saved',notfinished:'Not finished',skipped:'Skipped by you',notrun:'Not run'};
+const BADGE={portable:'Portable',zip:'Zip',interactive:'A few clicks'};
+const FINAL=new Set(['done','up-to-date','mismatch','unsupported','manual','failed','cancelled','saved','skipped','notrun']);
+const BUSY=new Set(['downloading','verifying','installing','unpacking']);
 const el=(t,c,x)=>{const e=document.createElement(t);if(c)e.className=c;if(x!==undefined)e.textContent=x;return e};
 const $=id=>document.getElementById(id);
-let state=null,seen=false,fails=0,lost=false,logPath='',sized=false;
+let state=null,seen=false,fails=0,lost=false,logPath='',moved=false,focusedEnd=false;
 const track={}; // row index -> {status, at, done, doneAt}: for the clocks when the server sends no 'since'
+const rows={};  // row index -> {li, sig, lbl, bar}
 const box=$('nosend');
 box.onchange=()=>fetch('report?send='+(box.checked?'0':'1'),{method:'POST'}).catch(()=>{});
+const post=(p)=>fetch(p,{method:'POST'}).catch(()=>{});
 function mb(n){if(n>=1e9)return(n/1e9).toFixed(2)+' GB';if(n>=1e8)return Math.round(n/1e6)+' MB';return(n/1e6).toFixed(1)+' MB'}
 function clock(sec){sec=Math.max(0,Math.floor(sec));const h=Math.floor(sec/3600),m=Math.floor(sec%3600/60),s=sec%60;const p=n=>String(n).padStart(2,'0');return h?h+':'+p(m)+':'+p(s):m+':'+p(s)}
 function bar(cls,pct,name){const b=el('span','bar '+cls);b.setAttribute('role','progressbar');b.setAttribute('aria-label',name);b.setAttribute('aria-valuemin','0');b.setAttribute('aria-valuemax','100');if(pct!==null){b.setAttribute('aria-valuenow',pct);const i=el('i');i.style.width=pct+'%';b.append(i)}else b.append(el('i'));return b}
 function openLog(e){if(state&&state.finished){e.preventDefault();fetch('open-log',{method:'POST'}).then(r=>{if(!r.ok)window.open('log','_blank')}).catch(()=>window.open('log','_blank'))}}
 $('log').onclick=openLog;
+
+// ---- the window fits its content: 720 wide (never under 600), 330 high at least, up to 80% of the free screen height; it only grows
+const MINW=600,MINH=330;
+function fit(){
+ try{
+  const chrome=outerHeight-innerHeight,want=$('top').offsetHeight+$('list').scrollHeight+($('stopbox').hidden?0:$('stopbox').offsetHeight)+$('dock').offsetHeight+chrome+4;
+  const cap=Math.floor(screen.availHeight*0.8),h=Math.max(outerHeight,MINH,Math.min(cap,want));
+  const w=outerWidth<MINW?720:outerWidth;
+  if(h>outerHeight||w!==outerWidth)resizeTo(w,h);
+ }catch(e){}
+}
+addEventListener('resize',()=>{if(outerWidth<MINW){try{resizeTo(MINW,outerHeight)}catch(e){}}});
+
+// ---- Cancel: one line (Stop / Keep going); Esc and the window's own close do the same
+function askStop(show){
+ const c=$('confirm');
+ c.hidden=!show;$('close').hidden=show;
+ if(show)$('keep').focus();else if(!state||!state.finished)$('close').focus();
+}
+function running(){return state&&!state.preparing&&!state.finished&&!lost&&!state.nocode}
+$('stop').onclick=()=>{post('stop');askStop(false)};
+$('keep').onclick=()=>askStop(false);
+addEventListener('keydown',e=>{
+ if(e.key!=='Escape')return;
+ if(state&&state.finished){$('close').click();return}
+ if(running())askStop($('confirm').hidden);
+});
+addEventListener('beforeunload',e=>{if(running()&&!state.stopping){askStop(true);e.preventDefault();e.returnValue=''}});
+
+// ---- the finish actions
+$('share').onclick=async()=>{const url='https://software.fileion.com/setup';try{await navigator.clipboard.writeText(url)}catch(e){}
+ $('share').textContent='Link copied';setTimeout(()=>$('share').textContent='Share Fileion Installer',2000)};
+$('logfolder').onclick=()=>post('open-log-folder');
+$('retry').onclick=()=>{$('retry').hidden=true;focusedEnd=false;post('retry')};
+
+// ---- rows: built once and changed in place (a button keeps its focus; the live list says each change once)
+function btn(label,aria,act,i,cls){const b=el('button',cls||'rb',label);b.type='button';b.setAttribute('aria-label',aria);b.dataset.act=act;b.onclick=()=>post('row/'+act+'?i='+i);return b}
+function build(i,r,status){
+ const R=rows[i],li=R.li,name=r.name;
+ const focus=li.contains(document.activeElement)&&document.activeElement.dataset?document.activeElement.dataset.act:null;
+ li.replaceChildren();
+ li.className=status==='failed'||status==='mismatch'?'fail':status==='yourturn'?'turn':'';
+ const d=el('div','name'),b=el('b','',name);d.append(b);
+ if(r.kind&&BADGE[r.kind])d.append(el('span','bd',BADGE[r.kind]));
+ const sm=(t,c)=>{const s=el('small',c||'',t);d.append(s);return s};
+ if(status==='yourturn'){sm('Your turn: finish '+name+'’s setup window');sm('Untick any extra offers')}
+ else if(status==='notfinished')sm(r.message||'Setup window closed before the app installed');
+ else if(status==='saved')sm(r.message,'sel');
+ else if(status==='up-to-date')sm('Already installed, skipped');
+ else if((status==='failed'||status==='mismatch')&&r.message&&status!=='mismatch')sm(r.message);
+ if(r.link&&(status==='manual'||status==='unsupported'||status==='failed'||status==='mismatch')){const a=el('a','','Download from Fileion');a.href=r.link;a.target='_blank';a.rel='noopener';const s=el('small');s.append(a);d.append(s)}
+ R.note=null;
+ if(BUSY.has(status)||status==='yourturn'){R.note=el('small','');R.note.hidden=true;d.append(R.note)}
+ const acts=el('div','acts');
+ if(status==='saved'&&r.folder){
+  if(r.kind==='zip')acts.append(btn('Open folder','Open folder for '+name,'open',i));
+  else if(r.canRun)acts.append(btn('Run','Run '+name,'run',i));
+  else acts.append(btn('Open folder','Open folder for '+name,'open',i));
+  if(r.inStart)acts.append(el('span','tag','✓ In Start menu'));
+  else if(r.canRun)acts.append(btn('Add to Start menu','Add '+name+' to Start menu','start',i));
+  acts.append(btn('Move…','Move '+name+' to another folder','move',i));
+ }
+ if(status==='yourturn')acts.append(btn('Skip','Skip '+name,'skip',i));
+ if(status==='notfinished'){acts.append(btn('Retry','Retry '+name,'retry',i),btn('Skip','Skip '+name,'skip',i))}
+ if(acts.children.length)d.append(acts);
+ const st=el('div','st '+status);R.st=st;R.lbl=null;R.bar=null;
+ if(status==='downloading'){st.classList.add('dl');R.bar=bar('big',0,'Downloading '+name);R.lbl=el('span','lbl');st.append(R.bar,R.lbl)}
+ else if(status==='installing'||status==='verifying'||status==='unpacking'){R.bar=bar('ind',null,(status==='installing'?'Installing ':status==='unpacking'?'Unpacking ':'Verifying ')+name);R.lbl=el('span','lbl');st.append(R.bar,R.lbl)}
+ else if(status!=='yourturn')st.append(el('span','lbl',LABEL[status]||status));
+ li.append(d,st);
+ if(focus){const t=li.querySelector('[data-act="'+focus+'"]')||li.querySelector('button');if(t)t.focus()}
+}
+function tick1(i,r,status,secs,t){ // the parts that change every second without a new row
+ const R=rows[i];if(!R||!R.lbl&&!R.note)return;
+ const stopping=state.stopping;
+ if(R.lbl){
+  if(status==='downloading'){
+   const total=r.total||0,done=r.done||0;
+   if(total>0){const pct=Math.min(99,Math.floor(done/total*100));R.lbl.textContent=mb(done)+' of '+mb(total)+' · '+pct+'%';R.bar.setAttribute('aria-valuenow',pct);R.bar.firstChild.style.width=pct+'%'}
+   else{R.lbl.textContent=done>0?mb(done):'Downloading…'}
+  }else if(status==='installing')R.lbl.textContent=stopping?'Stopping after this app…':'Installing… '+clock(secs);
+  else if(status==='verifying')R.lbl.textContent='Verifying SHA-256… '+clock(secs);
+  else if(status==='unpacking')R.lbl.textContent='Unpacking…';
+ }
+ if(R.note){
+  let note='';
+  if(status==='downloading'){if((Date.now()-t.doneAt)/1000>=120)note='No data for 2 minutes. Your connection may be slow or have dropped. The installer keeps trying.'}
+  else if(status==='installing'){if(secs>=600)note='Still running after 10 minutes. If nothing changes, see the log.';else if(secs>=120)note='Still running. Large installers can take several minutes. You can leave this window open.'}
+  R.note.textContent=note;R.note.hidden=!note;
+ }
+}
 function render(){
  const s=state;if(!s)return;
- const now=Date.now(),rows=s.rows||[];
+ if(s.redirect&&!moved){moved=true;location.replace(s.redirect);return}
+ const now=Date.now(),rs=s.rows||[],n=rs.length;
  document.body.classList.toggle('stopped',lost);
- $('stopicon').hidden=!lost;$('stopbox').hidden=!(lost&&logPath);$('log').hidden=lost;box.disabled=lost;box.title=lost?'The installer is not running':'';
- const fin=rows.filter(r=>FINAL.has(r.status)).length,n=rows.length;
- const intro=$('intro'),h=$('ht');
- $('nocode').hidden=!s.nocode;$('admin').hidden=!s.admin||s.nocode||lost;
- if(s.nocode){h.textContent='No app list';intro.textContent=s.note;$('count').hidden=true;$('overall').hidden=true;document.querySelector('footer').hidden=true;$('log').hidden=true;$('list').replaceChildren();return}
+ $('stopicon').hidden=!lost;$('stopbox').hidden=!(lost&&logPath);$('log').hidden=lost||s.finished;box.disabled=lost;box.title=lost?'The installer is not running':'';
+ const fin=rs.filter(r=>FINAL.has(r.status)).length;
+ const intro=$('intro'),h=$('ht'),ov=$('overall');
+ $('nocode').hidden=!s.nocode;
+ if(s.nocode){h.textContent='No app list';intro.hidden=false;intro.textContent=s.note;$('count').hidden=true;ov.hidden=true;document.querySelector('footer').hidden=true;$('log').hidden=true;$('list').replaceChildren();$('close').textContent='Close';return}
  if(lost){
-  h.textContent='The installer stopped';
+  h.textContent='The installer stopped';intro.hidden=false;
   intro.textContent='This window lost contact with the installer, so it cannot show progress any more. Apps that were already installed stay installed. Start the installer file again to continue: it skips what is up to date.';
-  $('count').hidden=true;$('overall').hidden=true;
+  $('count').hidden=true;ov.hidden=true;
+ }else if(s.preparing&&!s.note){
+  h.textContent='Preparing…';intro.hidden=true;$('count').hidden=true;
+  ov.hidden=false;ov.className='overall ind';ov.setAttribute('aria-label','Preparing');ov.removeAttribute('aria-valuenow');
  }else{
-  h.textContent=!n?'Getting your list':(!s.finished?'Installing '+n+' app'+(n==1?'':'s'):(s.bad==0?'All done':'Finished: '+s.ok+' worked, '+s.bad+' did not'));
-  intro.textContent=s.note||(s.finished?s.ok+' worked, '+s.bad+' did not. Run this file again any time to update the same apps.':n?'Downloading from each official vendor URL and checking against the vendor’s SHA-256.':'Reading your list…');
-  $('count').hidden=!n;$('count').textContent=fin+' of '+n;
-  const o=$('overall');o.hidden=!n;o.setAttribute('aria-valuemax',n);o.setAttribute('aria-valuenow',fin);o.firstChild.style.width=(n?fin/n*100:0)+'%';
-  o.className='overall'+(s.finished?(s.bad==0?' ok':' skip'):'');
+  ov.setAttribute('aria-label','Overall progress');
+  h.textContent=s.preparing||!n?(s.finished?'Nothing was installed':'Getting your list'):s.stopping&&!s.finished?'Stopping…':!s.finished?'Installing '+n+' app'+(n==1?'':'s'):'Finished';
+  intro.hidden=false;
+  intro.textContent=s.note||(s.finished?'':n?'Checked against the vendor’s SHA-256 before it runs':'Reading your list…');
+  intro.hidden=!intro.textContent;
+  $('count').hidden=!n;$('count').textContent=s.finished?(s.bad?s.ok+' done, '+s.bad+' failed':s.ok+' of '+n+' done'):fin+' of '+n;
+  ov.hidden=!n;ov.setAttribute('aria-valuemax',n);ov.setAttribute('aria-valuenow',fin);ov.firstChild.style.width=(n?fin/n*100:0)+'%';
+  ov.className='overall'+(s.finished?(s.bad==0?' ok':' skip'):'');
  }
- $('close').className=s.finished||lost?'primary':'';
- const ul=$('list');ul.replaceChildren();
- rows.forEach((r,i)=>{
+ const done=s.finished||lost;
+ $('close').textContent=done?'Close':'Cancel';$('close').className=done?'primary':'';
+ $('share').hidden=!s.finished||lost;$('report').hidden=!s.finished||lost;$('logfolder').hidden=!s.finished||lost;
+ $('retry').hidden=!(s.finished&&s.bad>0)||lost;
+ if(s.finished||lost){$('confirm').hidden=true;$('close').hidden=false}
+ else if(s.preparing&&!s.note){$('close').hidden=true;$('log').hidden=true} // nothing to cancel yet: Windows' own prompt is up
+ if(s.finished&&!focusedEnd&&!lost){focusedEnd=true;(!$('retry').hidden?$('retry'):$('close')).focus()}
+ const ul=$('list');
+ rs.forEach((r,i)=>{
   let t=track[i];if(!t||t.status!==r.status){t=track[i]={status:r.status,at:r.since||now,done:r.done||0,doneAt:now}}
   if((r.done||0)!==t.done){t.done=r.done||0;t.doneAt=now}
   const status=lost&&BUSY.has(r.status)?'cancelled':r.status;
-  const li=el('li'),d=el('div','name');d.append(el('b','',r.name));
-  if((status==='failed'||status==='mismatch')&&r.message)d.append(el('small','',r.message));
-  const since=r.since||t.at,secs=(now-since)/1000;
-  if(!lost&&BUSY.has(status)){
-   let note='';
-   if(status==='downloading'){if((now-t.doneAt)/1000>=120)note='No data for 2 minutes. Your connection may be slow or have dropped. The installer keeps trying.'}
-   else if(secs>=600){note='Still running after 10 minutes. If nothing changes, '}
-   else if(secs>=120){note='Still running. Large installers can take several minutes. You can leave this window open.'}
-   if(note){const sm=el('small','',note);if(secs>=600&&status!=='downloading'){const a=el('a','','open the log');a.href='log';a.target='_blank';a.rel='noopener';a.onclick=openLog;sm.append(a,'.')}d.append(sm)}
-  }
-  if(r.link&&(status==='manual'||status==='unsupported'||status==='failed')){const a=el('a','','Download from Fileion');a.href=r.link;a.target='_blank';a.rel='noopener';const sm=el('small');sm.append(a);d.append(sm)}
-  const st=el('div','st '+status);
-  if(status==='downloading'){
-   st.classList.add('dl');
-   const total=r.total||0,done=r.done||0;
-   if(total>0){const pct=Math.min(99,Math.floor(done/total*100));st.append(bar('big',pct,'Downloading '+r.name),el('span','lbl',mb(done)+' of '+mb(total)+' · '+pct+'%'))}
-   else st.append(bar('big ind',null,'Downloading '+r.name),el('span','lbl',done>0?mb(done):'Downloading…'))
-  }else if(status==='installing'||status==='verifying'){
-   st.append(bar('ind',null,(status==='installing'?'Installing ':'Checking ')+r.name),el('span','lbl',(status==='installing'?'Installing…':'Checking SHA-256…')+' '+clock(secs)))
-  }else st.append(el('span','lbl',label[status]||status));
-  li.append(d,st);ul.append(li);
+  let R=rows[i];if(!R){R=rows[i]={li:el('li'),sig:''};ul.append(R.li)}
+  const sig=[status,r.kind,r.canRun,r.inStart,r.folder,r.link,(status==='failed'||status==='notfinished'||status==='saved')?r.message:''].join('|');
+  if(sig!==R.sig){R.sig=sig;build(i,r,status)}
+  tick1(i,r,status,(now-(r.since||t.at))/1000,t);
  });
- if(!sized&&n){sized=true;try{window.resizeTo(outerWidth,Math.min(720,Math.max(420,document.documentElement.scrollHeight+outerHeight-innerHeight)))}catch(e){}}
+ fit();
 }
 async function tick(){
  try{
@@ -148,7 +250,9 @@ async function tick(){
 setInterval(()=>{if(state)render()},1000);
 $('copy').onclick=async()=>{try{await navigator.clipboard.writeText(logPath)}catch(e){const r=document.createRange();r.selectNodeContents($('logpath'));getSelection().removeAllRanges();getSelection().addRange(r);try{document.execCommand('copy')}catch(_){}}
  $('copy').textContent='Copied';setTimeout(()=>$('copy').textContent='Copy path',2000)};
-$('close').onclick=async()=>{try{await fetch('close',{method:'POST'})}catch(e){}window.close()};
+$('close').onclick=async()=>{
+ if(!(state&&(state.finished||lost||state.nocode))){askStop(true);return} // Cancel is a question first
+ try{await fetch('close',{method:'POST'})}catch(e){}window.close()};
 tick();
 </script>
 </body>

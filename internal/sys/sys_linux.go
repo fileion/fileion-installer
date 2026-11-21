@@ -28,13 +28,13 @@ func Exec(ctx context.Context, name string, args []string) error {
 func IsAdmin() bool { return true }
 
 // RelaunchAsAdmin is never needed on Linux.
-func RelaunchAsAdmin([]string) error { return nil }
+func RelaunchAsAdmin([]string) (func() (int, error), error) { return nil, nil }
 
 // OpenWindow shows the progress page in its own browser window (Chromium-based apps mode when there is one), else the default browser.
 func OpenWindow(url string) error {
 	for _, b := range []string{"chromium", "chromium-browser", "google-chrome", "microsoft-edge", "brave-browser"} {
 		if p, err := exec.LookPath(b); err == nil {
-			return exec.Command(p, "--app="+url, "--window-size=520,560").Start()
+			return exec.Command(p, "--app="+url, "--window-size=720,330").Start()
 		}
 	}
 	return exec.Command("xdg-open", url).Start()

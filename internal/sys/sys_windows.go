@@ -7,6 +7,7 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -140,27 +141,62 @@ func IsAdmin() bool {
 	return r != 0 && elevated != 0
 }
 
-// RelaunchAsAdmin starts this program again through the Windows permission prompt ("runas") and returns; the caller then exits.
-func RelaunchAsAdmin(args []string) error {
+type shellExecuteInfo struct {
+	cbSize         uint32
+	fMask          uint32
+	hwnd           uintptr
+	lpVerb         *uint16
+	lpFile         *uint16
+	lpParameters   *uint16
+	lpDirectory    *uint16
+	nShow          int32
+	hInstApp       uintptr
+	lpIDList       uintptr
+	lpClass        *uint16
+	hkeyClass      uintptr
+	dwHotKey       uint32
+	hIconOrMonitor uintptr
+	hProcess       syscall.Handle
+}
+
+var shellExecuteExW = shell32.NewProc("ShellExecuteExW")
+
+// RelaunchAsAdmin starts this program again through the Windows permission prompt ("runas"). It returns at once with a function that waits for the
+// elevated copy to end and gives its exit code; the error is set when the person said No at the prompt (or Windows could not ask).
+func RelaunchAsAdmin(args []string) (func() (int, error), error) {
 	exe, err := os.Executable()
 	if err != nil {
-		return err
+		return nil, err
+	}
+	quoted := make([]string, len(args))
+	for i, a := range args {
+		quoted[i] = syscall.EscapeArg(a)
 	}
 	verb, _ := syscall.UTF16PtrFromString("runas")
 	file, _ := syscall.UTF16PtrFromString(exe)
-	params, _ := syscall.UTF16PtrFromString(strings.Join(args, " "))
-	r, _, _ := shellExecuteW.Call(0, uintptr(unsafe.Pointer(verb)), uintptr(unsafe.Pointer(file)), uintptr(unsafe.Pointer(params)), 0, 1)
-	if r <= 32 {
-		return errNoElevationAPI
+	params, _ := syscall.UTF16PtrFromString(strings.Join(quoted, " "))
+	info := shellExecuteInfo{fMask: 0x40 | 0x100, lpVerb: verb, lpFile: file, lpParameters: params, nShow: 1} // SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC
+	info.cbSize = uint32(unsafe.Sizeof(info))
+	if r, _, e := shellExecuteExW.Call(uintptr(unsafe.Pointer(&info))); r == 0 {
+		return nil, e
 	}
-	return nil
+	h := info.hProcess
+	return func() (int, error) {
+		defer syscall.CloseHandle(h)
+		if _, err := syscall.WaitForSingleObject(h, syscall.INFINITE); err != nil {
+			return -1, err
+		}
+		var code uint32
+		err := syscall.GetExitCodeProcess(h, &code)
+		return int(code), err
+	}, nil
 }
 
 // OpenWindow shows the progress page in its own Edge window (Edge ships with Windows 10 and 11); any other browser is the fallback.
 func OpenWindow(url string) error {
 	for _, edge := range []string{os.Getenv("ProgramFiles(x86)") + `\Microsoft\Edge\Application\msedge.exe`, os.Getenv("ProgramFiles") + `\Microsoft\Edge\Application\msedge.exe`} {
 		if _, err := os.Stat(edge); err == nil {
-			return exec.Command(edge, "--app="+url, "--window-size=520,560").Start()
+			return exec.Command(edge, "--app="+url, "--window-size=720,330").Start()
 		}
 	}
 	return exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
@@ -206,4 +242,196 @@ func validHandle(h uintptr) bool { return h != 0 && h != ^uintptr(0) }
 // OpenFile opens a file in the person's own program (Notepad for a log), so the window can show the log file itself, not a localhost address.
 func OpenFile(path string) error {
 	return exec.Command("notepad.exe", path).Start()
+}
+
+var (
+	ole32             = syscall.NewLazyDLL("ole32.dll")
+	getKnownFolder    = shell32.NewProc("SHGetKnownFolderPath")
+	coTaskMemFree     = ole32.NewProc("CoTaskMemFree")
+	createJobObject   = kernel32.NewProc("CreateJobObjectW")
+	assignToJob       = kernel32.NewProc("AssignProcessToJobObject")
+	terminateJob      = kernel32.NewProc("TerminateJobObject")
+	queryJob          = kernel32.NewProc("QueryInformationJobObject")
+	enumWindows       = user32.NewProc("EnumWindows")
+	getWindowTextW    = user32.NewProc("GetWindowTextW")
+	getClassNameW     = user32.NewProc("GetClassNameW")
+	isWindowVisible   = user32.NewProc("IsWindowVisible")
+	isIconic          = user32.NewProc("IsIconic")
+	showWindow        = user32.NewProc("ShowWindow")
+	setForeground     = user32.NewProc("SetForegroundWindow")
+	flashWindowEx     = user32.NewProc("FlashWindowEx")
+	windowTitlePrefix = "Fileion Installer"
+)
+
+type guid struct {
+	d1 uint32
+	d2 uint16
+	d3 uint16
+	d4 [8]byte
+}
+
+var (
+	folderDownloads    = guid{0x374DE290, 0x123F, 0x4565, [8]byte{0x91, 0x64, 0x39, 0xC4, 0x92, 0x5E, 0x46, 0x7B}}
+	folderPrograms     = guid{0xA77F5D77, 0x2E2B, 0x44C3, [8]byte{0xA6, 0xA2, 0xAB, 0xA6, 0x01, 0x05, 0x4A, 0x51}}
+	folderLocalAppData = guid{0xF1B32785, 0x6FBA, 0x4FCF, [8]byte{0x9D, 0x55, 0x7B, 0x8E, 0x7F, 0x15, 0x70, 0x91}}
+)
+
+func knownFolder(id guid) string {
+	var p *uint16
+	if r, _, _ := getKnownFolder.Call(uintptr(unsafe.Pointer(&id)), 0, 0, uintptr(unsafe.Pointer(&p))); r != 0 || p == nil {
+		return ""
+	}
+	defer coTaskMemFree.Call(uintptr(unsafe.Pointer(p)))
+	n := 0
+	for q := unsafe.Pointer(p); *(*uint16)(q) != 0; q = unsafe.Add(q, 2) {
+		n++
+	}
+	return string(utf16.Decode(unsafe.Slice(p, n)))
+}
+
+// UserDirs gives the signed-in person's Downloads folder, Start menu Programs folder and %LOCALAPPDATA% (what the portable apps use). When the installer
+// is started by a standard user and elevated with an administrator's name, these must come from the first (the person's own) process.
+func UserDirs() (downloads, programs, localAppData string) {
+	return knownFolder(folderDownloads), knownFolder(folderPrograms), knownFolder(folderLocalAppData)
+}
+
+// ExecJob runs a program inside a job object and waits until the program and everything it started have ended, so a setup that starts the real
+// setup and exits is still waited for. When ctx ends the whole job is ended. The program's own windows are shown.
+func ExecJob(ctx context.Context, name string, args []string) error {
+	cmd := exec.Command(name, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000}
+	job, _, _ := createJobObject.Call(0, 0)
+	if job == 0 {
+		return Exec(ctx, name, args)
+	}
+	defer syscall.CloseHandle(syscall.Handle(job))
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	// shortcut: a child the program starts in the instant before it is assigned to the job is not in it; assigning it suspended would need CreateProcess by hand, do that if it is ever seen
+	h, err := syscall.OpenProcess(0x0100|0x0001, false, uint32(cmd.Process.Pid)) // PROCESS_SET_QUOTA | PROCESS_TERMINATE
+	if err == nil {
+		defer syscall.CloseHandle(h)
+	}
+	if err != nil {
+		return waitTree(ctx, cmd)
+	}
+	if r, _, _ := assignToJob.Call(job, uintptr(h)); r == 0 {
+		return waitTree(ctx, cmd)
+	}
+	waited := make(chan error, 1)
+	go func() { waited <- cmd.Wait() }()
+	var main error
+	haveMain := false
+	tick := time.NewTicker(500 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		select {
+		case main = <-waited:
+			haveMain = true
+			waited = nil
+		case <-ctx.Done():
+			terminateJob.Call(job, 1)
+			return ctx.Err()
+		case <-tick.C:
+		}
+		if jobActive(job) == 0 && (haveMain || waited == nil) {
+			return main
+		}
+	}
+}
+
+// jobActive is how many processes are still running in the job.
+func jobActive(job uintptr) uint32 {
+	var info struct {
+		totalUser, totalKernel, periodUser, periodKernel int64
+		pageFaults, total, active, terminated            uint32
+	}
+	if r, _, _ := queryJob.Call(job, 1, uintptr(unsafe.Pointer(&info)), unsafe.Sizeof(info), 0); r == 0 {
+		return 0
+	}
+	return info.active
+}
+
+// waitTree is the fallback when the program cannot be put in a job: wait for it alone, and end its tree on ctx.
+func waitTree(ctx context.Context, cmd *exec.Cmd) error {
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		exec.Command("taskkill", "/T", "/F", "/PID", strconv.Itoa(cmd.Process.Pid)).Run()
+		<-done
+		return ctx.Err()
+	}
+}
+
+// FrontWindow brings the installer's window to the front and flashes its taskbar button until it is used. Windows does not let a background
+// program take the foreground, so the flash is what always works; the restore and the foreground request are best effort.
+func FrontWindow() {
+	var found uintptr
+	cb := syscall.NewCallback(func(hwnd uintptr, _ uintptr) uintptr {
+		if v, _, _ := isWindowVisible.Call(hwnd); v == 0 {
+			return 1
+		}
+		buf := make([]uint16, 128)
+		n, _, _ := getWindowTextW.Call(hwnd, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+		if !strings.HasPrefix(string(utf16.Decode(buf[:n])), windowTitlePrefix) {
+			return 1
+		}
+		cn := make([]uint16, 64)
+		m, _, _ := getClassNameW.Call(hwnd, uintptr(unsafe.Pointer(&cn[0])), uintptr(len(cn)))
+		if string(utf16.Decode(cn[:m])) != "Chrome_WidgetWin_1" { // the browser's app window, not an Explorer window of that name
+			return 1
+		}
+		found = hwnd
+		return 0
+	})
+	enumWindows.Call(cb, 0)
+	if found == 0 {
+		return
+	}
+	if v, _, _ := isIconic.Call(found); v != 0 {
+		showWindow.Call(found, 9) // SW_RESTORE
+	}
+	setForeground.Call(found)
+	fl := struct {
+		size    uint32
+		hwnd    uintptr
+		flags   uint32
+		count   uint32
+		timeout uint32
+	}{flags: 0x3 | 0xC, count: 0xFFFFFFFF} // FLASHW_ALL | FLASHW_TIMERNOFG: until the window is in front
+	fl.size, fl.hwnd = uint32(unsafe.Sizeof(fl)), found
+	flashWindowEx.Call(uintptr(unsafe.Pointer(&fl)))
+}
+
+// RunAsUser starts a program the way a double click in Explorer does, as the signed-in person: the installer itself runs as administrator, and a portable app should not.
+func RunAsUser(path string) error { return exec.Command("explorer.exe", path).Start() }
+
+// OpenFolder shows a folder in Explorer.
+func OpenFolder(path string) error { return exec.Command("explorer.exe", path).Start() }
+
+func powershell(env []string, script string) ([]byte, error) {
+	cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-STA", "-ExecutionPolicy", "Bypass", "-Command", script)
+	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000}
+	cmd.Env = append(os.Environ(), env...)
+	return cmd.Output()
+}
+
+// PickFolder shows the Windows folder picker and returns the chosen folder ("" when cancelled).
+func PickFolder(title string) (string, error) {
+	out, err := powershell([]string{"FI_TITLE=" + title}, `Add-Type -AssemblyName System.Windows.Forms; $d = New-Object System.Windows.Forms.FolderBrowserDialog; $d.Description = $env:FI_TITLE; if ($d.ShowDialog() -eq 'OK') { [Console]::Out.Write($d.SelectedPath) }`)
+	return strings.TrimSpace(string(out)), err
+}
+
+// CreateShortcut writes a .lnk (Windows has no plain-file form of it; the Windows scripting object makes it).
+func CreateShortcut(lnk, target, workDir string) error {
+	if err := os.MkdirAll(filepath.Dir(lnk), 0o755); err != nil {
+		return err
+	}
+	_, err := powershell([]string{"FI_LNK=" + lnk, "FI_TARGET=" + target, "FI_WD=" + workDir},
+		`$s = (New-Object -ComObject WScript.Shell).CreateShortcut($env:FI_LNK); $s.TargetPath = $env:FI_TARGET; $s.WorkingDirectory = $env:FI_WD; $s.Save()`)
+	return err
 }
