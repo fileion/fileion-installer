@@ -438,6 +438,14 @@ func (r *Runner) install(ctx context.Context, a manifest.App, name string, args 
 		return v, found && AtLeast(v, a.MinVersion)
 	}
 
+	// Ending the installer is not done until its process tree is killed: the kill runs in the Exec goroutine, and the run may exit right after this returns
+	endAndWait := func() {
+		endIt()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+		}
+	}
 	tick, hintT, deadline := time.NewTicker(poll), time.NewTimer(hint), time.NewTimer(limit)
 	defer tick.Stop()
 	defer hintT.Stop()
@@ -466,7 +474,7 @@ func (r *Runner) install(ctx context.Context, a manifest.App, name string, args 
 				logf("its installer is still open after %s and is left running (not killed): the app is installed", elapsed())
 				return Result{Status: Done, Message: "Installed " + strings.TrimSpace(a.Version) + " (its installer is still open: you can close it)"}
 			case <-ctx.Done():
-				endIt()
+				endAndWait()
 				return Result{Status: Cancelled, Message: "Stopped"}
 			}
 		case <-hintT.C:
@@ -474,10 +482,10 @@ func (r *Runner) install(ctx context.Context, a manifest.App, name string, args 
 			r.say(a, Installing, a.Name+"'s installer may be waiting for you: look for its window or in the taskbar", "")
 		case <-deadline.C:
 			logf("time limit of %s reached; ending the installer", limit)
-			endIt()
+			endAndWait()
 			return Result{Status: Manual, Message: "Skipped: needs manual install"}
 		case <-ctx.Done():
-			endIt()
+			endAndWait()
 			return Result{Status: Cancelled, Message: "Stopped"}
 		}
 	}

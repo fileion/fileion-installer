@@ -207,6 +207,27 @@ func TestAnInstallerThatHangsIsStoppedAndMarkedManualWithItsFileionPage(t *testi
 	}
 }
 
+func TestTheTimeoutWaitsForTheKillToFinishBeforeItReturns(t *testing.T) {
+	body := []byte("setup with its own window")
+	s := &spy{hang: true}
+	srv := server(t, body, s)
+	r := newRunner(t, srv, notInstalled, s)
+	r.AppTimeout = 50 * time.Millisecond
+	var killed atomic.Bool
+	r.Exec = func(ctx context.Context, name string, args []string) error {
+		<-ctx.Done()
+		time.Sleep(300 * time.Millisecond) // taskkill /T /F takes a moment
+		killed.Store(true)
+		return ctx.Err()
+	}
+	if res := r.RunApp(context.Background(), app(srv, sum(body))); res.Status != Manual {
+		t.Fatalf("status = %s, want manual", res.Status)
+	}
+	if !killed.Load() {
+		t.Fatal("the result came back before the installer's kill finished (the program could exit and leave it running)")
+	}
+}
+
 func TestTheHashCheckRunsBeforeAnythingIsStartedEvenWithATimeoutSet(t *testing.T) {
 	s := &spy{hang: true}
 	srv := server(t, []byte("wrong"), s)
