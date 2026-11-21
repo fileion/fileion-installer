@@ -18,7 +18,7 @@ body{margin:0;display:flex;flex-direction:column;overflow:hidden;font:14px/1.45 
 #top{flex:none;padding:18px 20px 0}
 #scroll{flex:1 1 auto;min-height:0;overflow-y:auto;padding:0 20px}
 .head{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
-h1{display:flex;align-items:center;gap:8px;font-size:16px;line-height:1.3;font-weight:700;margin:0}h1 svg{color:var(--skip);flex:none}
+h1{display:flex;align-items:center;gap:8px;font-size:16px;line-height:1.3;font-weight:700;margin:0}h1 svg{flex:none}#stopicon{color:var(--skip)}
 .count{font-size:13px;color:var(--mut);white-space:nowrap}
 .intro{font-size:13px;line-height:1.45;color:var(--mut);margin:4px 0 8px}
 .overall{height:4px;border-radius:2px;margin:6px 0 10px;background:var(--bar-bg);overflow:hidden}.overall i{display:block;height:100%;width:0;background:var(--bar);transition:width .3s linear}
@@ -50,7 +50,7 @@ li small{display:block;font-size:12px;line-height:1.4;color:var(--mut)}li small 
 .confirm{display:flex;align-items:center;gap:10px}
 #close:not(.primary),#stop{border-color:transparent;background:none}#close:not(.primary):hover,#stop:hover{background:var(--btn-hover)}
 button svg,a svg,.ic{width:14px;height:14px;flex:none;vertical-align:-2px}button.rb,button.primary,.linkbtn,.actions a{display:inline-flex;align-items:center;gap:6px}
-.intro.chk::before{content:'';display:inline-block;width:14px;height:14px;margin-right:8px;vertical-align:-2px;background:currentColor;-webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12.5l4.5 4.5L19 7.5'/%3E%3C/svg%3E") center/contain no-repeat;mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12.5l4.5 4.5L19 7.5'/%3E%3C/svg%3E") center/contain no-repeat}
+.irow{display:flex;align-items:flex-start;gap:8px}.irow .intro{flex:1}.irow svg{color:var(--mut);margin-top:7px}
 .dot{margin:0 -8px;color:var(--foot)}.note3{display:flex;align-items:center;gap:6px;margin-top:4px}
 button{font:inherit;font-size:13px;font-weight:400;min-height:34px;padding:6px 18px;border-radius:6px;border:1px solid var(--btn-bd);background:var(--btn-bg);color:var(--btn-fg);cursor:pointer}
 button.rb{min-height:30px;padding:4px 12px}button.linkbtn{border:0;background:none;color:var(--link);padding:0;min-height:0}
@@ -76,7 +76,7 @@ footer a{color:var(--link)}
 <div id="top">
 <div class="head"><h1 id="h"><span id="hcheck" hidden><svg class="ic" style="width:18px;height:18px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span><svg id="stopicon" hidden viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v6M12 16.5v.5"/></svg><span id="ht">Preparing…</span></h1><span class="count" id="count" hidden></span></div>
 <div class="overall" id="overall" role="progressbar" aria-label="Overall progress" aria-valuemin="0" aria-valuemax="1" aria-valuenow="0" hidden><i></i></div>
-<p class="intro" id="intro" hidden></p>
+<div class="irow"><svg id="ick" class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" hidden><path d="M5 12.5l4.5 4.5L19 7.5"/></svg><p class="intro" id="intro" hidden></p></div>
 <p class="intro" id="nocode" hidden><a href="https://software.fileion.com/setup" target="_blank" rel="noopener">software.fileion.com/setup</a> · <a href="https://fileion.com/installer-help" target="_blank" rel="noopener">Help</a></p>
 </div>
 <div id="scroll">
@@ -115,7 +115,8 @@ $('log').onclick=openLog;
 
 // ---- the window fits its content. Two layouts: the start screen (420 wide, as high as its content) and the list (720 wide, 330 high at least, up to 80% of the free
 // screen height). The first layout of each is set exactly (shrinking if the window came up bigger); after that the window only grows.
-const MINW=600,MINH=330;let sized='';
+const MINW=600,MINH=0; // no minimum height: the list's own content sets it (a 1-app run was 50 px too tall)
+let sized='';
 function fit(){
  try{
   const chrome=outerHeight-innerHeight,prep=document.body.classList.contains('prep');
@@ -216,7 +217,7 @@ function render(){
  const pv=!lost&&(s.nocode||(s.preparing&&!s.note));document.body.classList.toggle('prep',pv);
  if(pv){$('ptitle').textContent=s.nocode?'No app list':'Preparing…';$('ptext').hidden=!s.nocode;$('ptext').textContent=s.note||'';$('plinks').hidden=!s.nocode;$('pbar').hidden=!!s.nocode;$('pclose').hidden=!s.nocode}
  document.body.classList.toggle('stopped',lost);
- $('stopicon').hidden=!lost;$('stopbox').hidden=!(lost&&logPath);$('log').hidden=lost||s.finished;box.disabled=lost;box.title=lost?'The installer is not running':'';
+ $('stopicon').toggleAttribute('hidden',!lost);$('stopbox').hidden=!(lost&&logPath);$('log').hidden=lost||s.finished;box.disabled=lost;box.title=lost?'The installer is not running':'';
  const fin=rs.filter(r=>FINAL.has(r.status)).length;
  const intro=$('intro'),h=$('ht'),ov=$('overall');
  $('nocode').hidden=!s.nocode;
@@ -258,6 +259,7 @@ function render(){
   if(sig!==R.sig){R.sig=sig;build(i,r,status)}
   tick1(i,r,status,(now-(r.since||t.at))/1000,t);
  });
+  $('ick').toggleAttribute('hidden',intro.hidden||lost||!intro.classList.contains('chk')); // an svg has no .hidden property
  fit();
 }
 async function tick(){

@@ -420,14 +420,15 @@ func TestStopMakesEveryAppNotYetStartedNotRunAtOnceAndLeavesTheRunningOne(t *tes
 
 func TestIconsComeOnlyFromFileionHttps(t *testing.T) {
 	for in, want := range map[string]string{
-		"https://software.fileion.com/curator/a.webp?s=1": "https://software.fileion.com/curator/a.webp?s=1",
-		"https://fileion.com/a.png":                       "https://fileion.com/a.png",
-		"http://software.fileion.com/a.png":               "",
-		"https://evilfileion.com/a.png":                   "",
-		"https://fileion.com.evil.net/a.png":              "",
-		"https://u:p@fileion.com/a.png":                   "",
-		"data:image/png;base64,AAAA":                      "",
-		"":                                                "",
+		"https://software.fileion.com/curator/a.webp?s=1":                      "https://software.fileion.com/curator/a.webp?s=1",
+		"https://fileion.com/a.png":                                            "https://fileion.com/a.png",
+		"https://fileion.com/storage/software/logos/2026/02/git-icon-logo.svg": "https://fileion.com/storage/software/logos/2026/02/git-icon-logo.svg",
+		"http://software.fileion.com/a.png":                                    "",
+		"https://evilfileion.com/a.png":                                        "",
+		"https://fileion.com.evil.net/a.png":                                   "",
+		"https://u:p@fileion.com/a.png":                                        "",
+		"data:image/png;base64,AAAA":                                           "",
+		"":                                                                     "",
 	} {
 		if got := SafeIcon(in); got != want {
 			t.Errorf("SafeIcon(%q) = %q, want %q", in, got, want)
