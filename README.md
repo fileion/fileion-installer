@@ -4,7 +4,7 @@ A small program that installs the apps you picked at [software.fileion.com/setup
 
 ## What it does
 
-1. Reads the short code of your list: first the code Fileion stamped inside the file (the last 32 bytes), so you can rename the file freely (`My special bundle.exe`), keep it on a pendrive and run it on many PCs; then, for older downloads, the code in the file name (`Fileion-VLC-7-Zip-and-4-more-3fa91c0b.exe` → `3fa91c0b`). A file with no code (or any other failure before the window opens) says so in a message box on Windows, or in the Fileion window on Linux, with a link to software.fileion.com/setup or the help page; the log is `%TEMP%\fileion-installer.log` (`/tmp/fileion-installer.log` on Linux).
+1. Reads the short code of your list: first the code Fileion stamped inside the file (the last 32 bytes), so you can rename the file freely (`My special bundle.exe`), keep it on a pendrive and run it on many PCs; then, for older downloads, the code in the file name (`Fileion-VLC-7-Zip-and-4-more-3fa91c0b.exe` → `3fa91c0b`). A file with no code (or any other failure before the window opens) says so in a message box on Windows, or in the Fileion window on Linux, with a link to software.fileion.com/setup or the help page; the log is `%LOCALAPPDATA%\Fileion\Logs\installer-<time>.log` (the newest 5 are kept; `~/.local/share/Fileion/Logs` on Linux).
 2. Gets the app list for that code from `https://software.fileion.com/setup/manifest/{code}` (JSON: vendor URL, SHA-256, how the app is handled (`mode`), silent switch, minimum version, product code, for a zip the program inside it, and for apps whose Uninstall key changes with every release a name rule).
 3. For each app:
    - **Windows:** every app is downloaded **from the vendor's own https address only** and its SHA-256 is checked against the vendor's before anything is run or unpacked; if it does not match, the file is **not used**, it is deleted and the window says so. What happens next depends on the app's `mode`:
@@ -90,7 +90,7 @@ The Windows icon and version info (Fileion mark, "Fileion Installer", the tag as
 
 1. Windows 10/11 VM, no admin user logged in is fine (the prompt appears). Download a file from the page once the switch is on, or rename a build to `Fileion-7-Zip-<code>.exe` with a real code.
 2. Run it: expect the "Preparing…" window, then the permission prompt, then the window listing each app (apps that need a few clicks last). Check: installed, "Up to date" on a second run, a deliberately wrong SHA-256 shows "Skipped" and nothing runs, an installer that never finishes is stopped at the limit (try `-app-timeout 30s`) with a Fileion link; an app that installs but leaves its own installer window open is left running, with "its installer is still open: you can close it".
-3. Check `%TEMP%\fileion-installer.log`, that downloaded files are gone from `%TEMP%`, and that SmartScreen shows its "unrecognized app" warning (the build is unsigned).
+3. Check the newest log in `%LOCALAPPDATA%\Fileion\Logs`, that downloaded files are gone from `%TEMP%`, and that SmartScreen shows its "unrecognized app" warning (the build is unsigned).
 4. Edge must exist (it ships with Windows 10/11); without it the default browser opens the page.
 
 - Safety: the installer runs as administrator, so it never writes through a symlink or junction under `Downloads\Fileion Apps`, and "Move…" refuses a folder inside itself. The elevated copy starts only if the window it hands over to is still open (a window closed during the permission prompt means nothing is installed).

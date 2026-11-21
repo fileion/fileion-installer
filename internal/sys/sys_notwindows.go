@@ -30,3 +30,12 @@ func UserDirs() (downloads, programs, localAppData string) {
 	h, _ := os.UserHomeDir()
 	return filepath.Join(h, "Downloads"), "", filepath.Join(h, ".local", "share")
 }
+
+// OpenURL opens an address in the default browser.
+func OpenURL(raw string) error { return exec.Command("xdg-open", raw).Start() }
+
+// OpenFolderSelect opens the folder of a file.
+func OpenFolderSelect(path string) error { return OpenFolder(filepath.Dir(path)) }
+
+// CenterLoop is Windows-only.
+func CenterLoop(stop <-chan struct{}) {}

@@ -196,15 +196,118 @@ func RelaunchAsAdmin(args []string) (func() (int, error), error) {
 func OpenWindow(url string) error {
 	for _, edge := range []string{os.Getenv("ProgramFiles(x86)") + `\Microsoft\Edge\Application\msedge.exe`, os.Getenv("ProgramFiles") + `\Microsoft\Edge\Application\msedge.exe`} {
 		if _, err := os.Stat(edge); err == nil {
-			// Its own profile: in the person's default one Edge restores the window size it saved from older runs and ignores --window-size
-			args := []string{"--app=" + url, "--window-size=420,260", "--no-first-run", "--no-default-browser-check"}
-			if lad := os.Getenv("LOCALAPPDATA"); lad != "" {
-				args = append(args, "--user-data-dir="+filepath.Join(lad, "Fileion", "window"))
-			}
+			args := EdgeArgs(url, os.Getenv("LOCALAPPDATA"), 420, 260)
+			Log("edge args: %s", strings.Join(args[1:], " "))
 			return exec.Command(edge, args...).Start()
 		}
 	}
+	Log("edge not found: the default browser opens the page")
 	return exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
+}
+
+// OpenURL opens a web address in the person's DEFAULT browser, never in the installer's own window, and as the signed-in person even when this
+// process is elevated (an elevated process starting a browser would run it as administrator): ShellExecute when not elevated, Explorer (the
+// person's own shell) when elevated.
+func OpenURL(raw string) error {
+	if IsAdmin() {
+		Log("open link: explorer (elevated) %s", raw)
+		return exec.Command("explorer.exe", raw).Start()
+	}
+	Log("open link: ShellExecute %s", raw)
+	verb, _ := syscall.UTF16PtrFromString("open")
+	file, _ := syscall.UTF16PtrFromString(raw)
+	if r, _, e := shellExecuteW.Call(0, uintptr(unsafe.Pointer(verb)), uintptr(unsafe.Pointer(file)), 0, 0, 1); r <= 32 {
+		return e
+	}
+	return nil
+}
+
+// OpenFolderSelect opens Explorer on the folder of a file with that file selected.
+func OpenFolderSelect(path string) error {
+	return exec.Command("explorer.exe", "/select,"+path).Start()
+}
+
+type rect struct{ left, top, right, bottom int32 }
+
+var (
+	getWindowRect      = user32.NewProc("GetWindowRect")
+	setWindowPos       = user32.NewProc("SetWindowPos")
+	monitorFromWindow  = user32.NewProc("MonitorFromWindow")
+	getMonitorInfoW    = user32.NewProc("GetMonitorInfoW")
+	setProcessDPIAware = user32.NewProc("SetProcessDPIAware")
+)
+
+// windowHandle finds the installer's Edge window (see FrontWindow).
+func windowHandle() uintptr {
+	var found uintptr
+	cb := syscall.NewCallback(func(hwnd uintptr, _ uintptr) uintptr {
+		if v, _, _ := isWindowVisible.Call(hwnd); v == 0 {
+			return 1
+		}
+		buf := make([]uint16, 128)
+		n, _, _ := getWindowTextW.Call(hwnd, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+		if !strings.HasPrefix(string(utf16.Decode(buf[:n])), windowTitlePrefix) {
+			return 1
+		}
+		cn := make([]uint16, 64)
+		m, _, _ := getClassNameW.Call(hwnd, uintptr(unsafe.Pointer(&cn[0])), uintptr(len(cn)))
+		if string(utf16.Decode(cn[:m])) != "Chrome_WidgetWin_1" {
+			return 1
+		}
+		found = hwnd
+		return 0
+	})
+	enumWindows.Call(cb, 0)
+	return found
+}
+
+// CenterLoop keeps the window centred on the work area (the screen without the taskbar) of the monitor it is on, until stop is closed. It acts when the
+// window's size changes (it grows from the start screen to the list) and only while the person has not moved it: once its top-left is not where this
+// loop put it, it is left alone. The process is made DPI-aware first, so the window and the work area are in the same (real) pixels. Every move is logged.
+func CenterLoop(stop <-chan struct{}) {
+	setProcessDPIAware.Call()
+	var lastX, lastY, lastW, lastH int32 = -1 << 30, -1 << 30, 0, 0
+	moved := false
+	t := time.NewTicker(300 * time.Millisecond)
+	defer t.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-t.C:
+		}
+		hwnd := windowHandle()
+		if hwnd == 0 || moved {
+			continue
+		}
+		var r rect
+		if ok, _, _ := getWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&r))); ok == 0 {
+			continue
+		}
+		w, h := r.right-r.left, r.bottom-r.top
+		if lastW != 0 && (r.left != lastX || r.top != lastY) {
+			moved = true // the person moved it
+			Log("window position: left alone, the person moved it (%d,%d)", r.left, r.top)
+			continue
+		}
+		if w == lastW && h == lastH && lastW != 0 {
+			continue
+		}
+		mon, _, _ := monitorFromWindow.Call(hwnd, 2) // MONITOR_DEFAULTTONEAREST
+		var mi struct {
+			size          uint32
+			monitor, work rect
+			flags         uint32
+		}
+		mi.size = uint32(unsafe.Sizeof(mi))
+		if ok, _, _ := getMonitorInfoW.Call(mon, uintptr(unsafe.Pointer(&mi))); ok == 0 {
+			continue
+		}
+		x, y := Centre(int(mi.work.left), int(mi.work.top), int(mi.work.right), int(mi.work.bottom), int(w), int(h))
+		setWindowPos.Call(hwnd, 0, uintptr(x), uintptr(y), 0, 0, 0x1|0x4|0x10) // SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE
+		Log("window position: %dx%d centred at %d,%d in work area %d,%d-%d,%d", w, h, x, y, mi.work.left, mi.work.top, mi.work.right, mi.work.bottom)
+		lastX, lastY, lastW, lastH = int32(x), int32(y), w, h
+	}
 }
 
 var (
@@ -451,6 +554,6 @@ func CreateShortcut(lnk, target, workDir string) error {
 		return err
 	}
 	_, err := powershell([]string{"FI_LNK=" + lnk, "FI_TARGET=" + target, "FI_WD=" + workDir},
-		`$s = (New-Object -ComObject WScript.Shell).CreateShortcut($env:FI_LNK); $s.TargetPath = $env:FI_TARGET; $s.WorkingDirectory = $env:FI_WD; $s.Save()`)
+		`$ErrorActionPreference = 'Stop'; $s = (New-Object -ComObject WScript.Shell).CreateShortcut($env:FI_LNK); $s.TargetPath = $env:FI_TARGET; $s.WorkingDirectory = $env:FI_WD; $s.Save()`)
 	return err
 }

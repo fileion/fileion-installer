@@ -48,10 +48,9 @@ li small{display:block;font-size:12px;line-height:1.4;color:var(--mut)}li small 
 .actions .l,.actions .r{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
 .actions a,.linkbtn{font-size:13px;color:var(--link);text-decoration:none;background:none;border:0;padding:0;min-height:0;cursor:pointer}.actions a:hover,.actions a:focus-visible,.linkbtn:hover{text-decoration:underline}
 .confirm{display:flex;align-items:center;gap:10px}
-#close:not(.primary),#stop{border-color:transparent;background:none}#close:not(.primary):hover,#stop:hover{background:var(--btn-hover)}
 button svg,a svg,.ic{width:14px;height:14px;flex:none;vertical-align:-2px}button.rb,button.primary,.linkbtn,.actions a{display:inline-flex;align-items:center;gap:6px}
 .irow{display:flex;align-items:flex-start;gap:8px}.irow .intro{flex:1}.irow svg{color:var(--mut);margin-top:7px}
-.dot{margin:0 -8px;color:var(--foot)}.note3{display:flex;align-items:center;gap:6px;margin-top:4px}
+.ext{width:12px;height:12px;margin-left:4px;vertical-align:-1px;flex:none}.dot{margin:0 -8px;color:var(--foot)}.note3{display:flex;align-items:center;gap:6px;margin-top:4px}
 button{font:inherit;font-size:13px;font-weight:400;min-height:34px;padding:6px 18px;border-radius:6px;border:1px solid var(--btn-bd);background:var(--btn-bg);color:var(--btn-fg);cursor:pointer}
 button.rb{min-height:30px;padding:4px 12px}button.linkbtn{border:0;background:none;color:var(--link);padding:0;min-height:0}
 button:hover{background:var(--btn-hover)}button.linkbtn:hover{background:none}button:disabled{opacity:.55;cursor:default}button:focus-visible,a:focus-visible{outline:2px solid var(--link);outline-offset:2px}
@@ -110,7 +109,9 @@ const post=(p)=>fetch(p,{method:'POST'}).catch(()=>{});
 function mb(n){if(n>=1e9)return(n/1e9).toFixed(2)+' GB';if(n>=1e8)return Math.round(n/1e6)+' MB';return(n/1e6).toFixed(1)+' MB'}
 function clock(sec){sec=Math.max(0,Math.floor(sec));const h=Math.floor(sec/3600),m=Math.floor(sec%3600/60),s=sec%60;const p=n=>String(n).padStart(2,'0');return h?h+':'+p(m)+':'+p(s):m+':'+p(s)}
 function bar(cls,pct,name){const b=el('span','bar '+cls);b.setAttribute('role','progressbar');b.setAttribute('aria-label',name);b.setAttribute('aria-valuemin','0');b.setAttribute('aria-valuemax','100');if(pct!==null){b.setAttribute('aria-valuenow',pct);const i=el('i');i.style.width=pct+'%';b.append(i)}else b.append(el('i'));return b}
-function openLog(e){if(state&&state.finished){e.preventDefault();fetch('open-log',{method:'POST'}).then(r=>{if(!r.ok)window.open('log','_blank')}).catch(()=>window.open('log','_blank'))}}
+function openLog(e){e.preventDefault();fetch('open-log',{method:'POST'}).then(r=>{if(!r.ok)window.open('log','_blank')}).catch(()=>window.open('log','_blank'))}
+// every address outside this window opens in the person's default browser (done by the program), never in this window
+document.addEventListener('click',e=>{const a=e.target.closest&&e.target.closest('a[href^="https://"]');if(!a)return;e.preventDefault();fetch('open-url?u='+encodeURIComponent(a.href),{method:'POST'}).catch(()=>{})});
 $('log').onclick=openLog;
 
 // ---- the window fits its content. Two layouts: the start screen (420 wide) and the list (720 wide). The width is set exactly on the first layout of each. The height
@@ -159,6 +160,9 @@ $('retry').onclick=()=>{$('retry').hidden=true;focusedEnd=false;post('retry')};
 
 // ---- rows: built once and changed in place (a button keeps its focus; the live list says each change once)
 const ICON={run:'<path d="M7 4l13 8-13 8z"/>',open:'<path d="M3 7h7l2 2h9v10H3z"/>',start:'<path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z"/>',move:'<path d="M4 12h16M14 6l6 6-6 6"/>',retry:'<path d="M20 12a8 8 0 1 1-2.5-5.8M20 4v5h-5"/>'};
+const EXT='<svg class="ext" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>';
+function addExt(a){a.insertAdjacentHTML('beforeend',EXT)} // a link that opens in the default browser
+document.querySelectorAll('footer a, #plinks a, #nocode a').forEach(addExt);
 function btn(label,aria,act,i,cls){const b=el('button',cls||'rb');if(ICON[act])b.insertAdjacentHTML('afterbegin','<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+ICON[act]+'</svg>');b.append(document.createTextNode(label));b.type='button';b.setAttribute('aria-label',aria);b.dataset.act=act;b.onclick=()=>post('row/'+act+'?i='+i);return b}
 function build(i,r,status){
  const R=rows[i],li=R.li,name=r.name;
@@ -174,7 +178,7 @@ function build(i,r,status){
  else if(status==='saved')sm(r.message,'sel');
  else if(status==='up-to-date')sm('Already installed, skipped');
  else if((status==='failed'||status==='mismatch')&&r.message&&status!=='mismatch')sm(r.message);
- if(r.link&&(status==='manual'||status==='unsupported'||status==='failed'||status==='mismatch')){const a=el('a','','Download from Fileion');a.href=r.link;a.target='_blank';a.rel='noopener';const s=el('small');s.append(a);d.append(s)}
+ if(r.link&&(status==='manual'||status==='unsupported'||status==='failed'||status==='mismatch')){const a=el('a','','Download from Fileion');a.href=r.link;a.target='_blank';a.rel='noopener';addExt(a);const s=el('small');s.append(a);d.append(s)}
  R.note=null;
  if(BUSY.has(status)||status==='yourturn'){R.note=el('small','');R.note.hidden=true;d.append(R.note)}
  const acts=el('div','acts');
@@ -186,6 +190,7 @@ function build(i,r,status){
   else if(r.canRun)acts.append(btn('Add to Start menu','Add '+name+' to Start menu','start',i));
   acts.append(btn('Move…','Move '+name+' to another folder','move',i));
  }
+ if(status==='failed'&&state.finished){const b=btn('Retry','Retry '+name,'retry',i);b.onclick=()=>{focusedEnd=false;post('retry')};acts.append(b)} // runs the same "Retry failed apps" pass
  if(status==='yourturn')acts.append(btn('Skip','Skip '+name,'skip',i));
  if(status==='notfinished'){acts.append(btn('Retry','Retry '+name,'retry',i),btn('Skip','Skip '+name,'skip',i))}
  if(acts.children.length)d.append(acts);
@@ -203,8 +208,9 @@ function tick1(i,r,status,secs,t){ // the parts that change every second without
  if(R.lbl){
   if(status==='downloading'){
    const total=r.total||0,done=r.done||0;
-   if(total>0){const pct=Math.min(99,Math.floor(done/total*100));R.lbl.textContent=mb(done)+' of '+mb(total)+' · '+pct+'%';R.bar.setAttribute('aria-valuenow',pct);R.bar.firstChild.style.width=pct+'%'}
-   else{R.lbl.textContent=done>0?mb(done):'Downloading…'}
+   const retrying=/^Download interrupted/.test(r.message||'');
+   if(total>0){const pct=Math.min(99,Math.floor(done/total*100));R.lbl.textContent=retrying?r.message:mb(done)+' of '+mb(total)+' · '+pct+'%';R.bar.setAttribute('aria-valuenow',pct);R.bar.firstChild.style.width=pct+'%'}
+   else{R.lbl.textContent=retrying?r.message:done>0?mb(done):'Downloading…'}
   }else if(status==='installing')R.lbl.textContent=stopping?'Stopping after this app…':'Installing… '+clock(secs);
   else if(status==='verifying')R.lbl.textContent='Verifying SHA-256…';
   else if(status==='unpacking')R.lbl.textContent='Unpacking…';
@@ -261,7 +267,7 @@ function render(){
   if((r.done||0)!==t.done){t.done=r.done||0;t.doneAt=now}
   const status=lost&&BUSY.has(r.status)?'cancelled':r.status;
   let R=rows[i];if(!R){R=rows[i]={li:el('li'),sig:''};ul.append(R.li)}
-  const sig=[status,!!s.stopping,r.kind,r.canRun,r.inStart,r.folder,r.link,(status==='failed'||status==='notfinished'||status==='saved')?r.message:''].join('|');
+  const sig=[status,!!s.stopping,r.kind,r.canRun,r.inStart,r.folder,r.link,!!state.finished,(status==='failed'||status==='notfinished'||status==='saved')?r.message:''].join('|');
   if(sig!==R.sig){R.sig=sig;build(i,r,status)}
   tick1(i,r,status,(now-(r.since||t.at))/1000,t);
  });

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"strings"
 	"testing"
@@ -433,5 +434,38 @@ func TestIconsComeOnlyFromFileionHttps(t *testing.T) {
 		if got := SafeIcon(in); got != want {
 			t.Errorf("SafeIcon(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestOnlyHttpsAddressesGoToTheDefaultBrowserAndOnlyByPost(t *testing.T) {
+	s, url, _ := New(t.TempDir()+"/log", false)
+	got := make(chan string, 4)
+	s.OpenURL = func(u string) { got <- u }
+	post := func(u string) int {
+		res, err := http.Post(url+"open-url?u="+neturl.QueryEscape(u), "", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		return res.StatusCode
+	}
+	if c := post("https://fileion.com/installer-help"); c != 204 {
+		t.Fatal(c)
+	}
+	if u := <-got; u != "https://fileion.com/installer-help" {
+		t.Fatal(u)
+	}
+	for _, bad := range []string{"http://x.example/", "file:///C:/Windows/notepad.exe", "javascript:alert(1)", ""} {
+		if c := post(bad); c != 400 {
+			t.Errorf("%q: %d", bad, c)
+		}
+	}
+	if res, _ := http.Get(url + "open-url?u=https://fileion.com/"); res.StatusCode != 400 {
+		t.Error("GET must not open anything")
+	}
+	select {
+	case u := <-got:
+		t.Fatalf("opened %s", u)
+	default:
 	}
 }
