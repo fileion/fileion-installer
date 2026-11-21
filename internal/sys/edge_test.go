@@ -97,3 +97,16 @@ func TestMissingFileIsSeededButAnyOtherReadErrorLeavesItAloneAndSkips(t *testing
 		t.Fatal("the unreadable Preferences was replaced")
 	}
 }
+
+func TestBrokenJsonPreferencesIsRefusedAndLeftByteForByte(t *testing.T) {
+	la := t.TempDir()
+	file := filepath.Join(ProfileDir(la), "Default", "Preferences")
+	os.MkdirAll(filepath.Dir(file), 0o700)
+	os.WriteFile(file, []byte(`{not json`), 0o600)
+	if _, err := SeedProfile(la); err == nil {
+		t.Fatal("must return an error")
+	}
+	if b, _ := os.ReadFile(file); string(b) != `{not json` {
+		t.Fatalf("the file was changed: %q", b)
+	}
+}
