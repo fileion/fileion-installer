@@ -113,18 +113,24 @@ function bar(cls,pct,name){const b=el('span','bar '+cls);b.setAttribute('role','
 function openLog(e){if(state&&state.finished){e.preventDefault();fetch('open-log',{method:'POST'}).then(r=>{if(!r.ok)window.open('log','_blank')}).catch(()=>window.open('log','_blank'))}}
 $('log').onclick=openLog;
 
-// ---- the window fits its content. Two layouts: the start screen (420 wide, as high as its content) and the list (720 wide, 330 high at least, up to 80% of the free
-// screen height). The first layout of each is set exactly (shrinking if the window came up bigger); after that the window only grows.
-const MINW=600,MINH=0; // no minimum height: the list's own content sets it (a 1-app run was 50 px too tall)
-let sized='';
+// ---- the window fits its content. Two layouts: the start screen (420 wide) and the list (720 wide). The width is set exactly on the first layout of each. The height
+// follows the content in BOTH directions and is corrected by what is measured, not estimated: delta = the content's height - the window's inner height, so any frame
+// or border Edge adds cancels out. A few corrections per change, then it stops (a window that cannot shrink is not fought forever). Every correction is logged.
+const MINW=600;let sized='',tries=0,lastTarget=-1;
 function fit(){
  try{
-  const chrome=outerHeight-innerHeight,prep=document.body.classList.contains('prep');
-  const want=(prep?$('prep').offsetHeight:$('top').offsetHeight+$('list').scrollHeight+($('stopbox').hidden?0:$('stopbox').offsetHeight)+$('dock').offsetHeight)+chrome+4;
-  const cap=Math.floor(screen.availHeight*0.8),fitted=Math.max(prep?0:MINH,Math.min(cap,want)),W=prep?420:720,key=prep?'p':'m';
-  if(sized!==key){sized=key;if(outerWidth!==W||outerHeight!==fitted)resizeTo(W,fitted);return}
-  const h=Math.max(outerHeight,fitted),w=prep?outerWidth:(outerWidth<MINW?720:outerWidth);
-  if(h>outerHeight||w!==outerWidth)resizeTo(w,h);
+  const prep=document.body.classList.contains('prep'),W=prep?420:720,key=prep?'p':'m';
+  const content=prep?$('prep').offsetHeight:$('top').offsetHeight+$('list').scrollHeight+($('stopbox').hidden?0:$('stopbox').offsetHeight)+$('dock').offsetHeight;
+  const target=Math.min(Math.floor(screen.availHeight*0.8),content),delta=target-innerHeight,fresh=sized!==key;
+  if(fresh){sized=key;tries=0}
+  if(target!==lastTarget){lastTarget=target;tries=0}
+  const w=fresh?W:(prep?outerWidth:(outerWidth<MINW?720:outerWidth));
+  if((fresh||Math.abs(delta)>1||w!==outerWidth)&&tries<6){
+   tries++;
+   fetch('fit?'+new URLSearchParams({key,tries,outer:outerWidth+'x'+outerHeight,inner:innerWidth+'x'+innerHeight,content,top:$('top').offsetHeight,list:$('list').scrollHeight,dock:$('dock').offsetHeight,scroll:$('scroll').offsetHeight,screen:screen.availHeight+'@'+devicePixelRatio,to:w+'x'+(outerHeight+delta)}),{method:'POST'}).catch(()=>{});
+   resizeTo(w,outerHeight+delta);
+   setTimeout(fit,250);
+  }else if(Math.abs(delta)<=1)tries=0;
  }catch(e){}
 }
 addEventListener('resize',()=>{if(!document.body.classList.contains('prep')&&outerWidth<MINW){try{resizeTo(MINW,outerHeight)}catch(e){}}});

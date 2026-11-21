@@ -108,6 +108,7 @@ func New(logPath string, admin bool) (*Server, string, error) {
 	mux.HandleFunc(base+"state", s.guard(s.getState))
 	mux.HandleFunc(base+"log", s.guard(s.log))
 	mux.HandleFunc(base+"close", s.guard(s.close))
+	mux.HandleFunc(base+"fit", s.guard(s.fit))
 	mux.HandleFunc(base+"report", s.guard(s.report))
 	mux.HandleFunc(base+"open-log", s.guard(s.openLog))
 	mux.HandleFunc(base+"open-log-folder", s.guard(s.post(func() {
@@ -496,4 +497,21 @@ func SafeIcon(raw string) string {
 		return ""
 	}
 	return u.String()
+}
+
+// fit writes one line to the log for each window-size correction the page makes (what it measured and what it asked for), so a window that is the wrong size can be explained.
+func (s *Server) fit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "use POST", http.StatusMethodNotAllowed)
+		return
+	}
+	line := "window fit:"
+	for _, k := range []string{"key", "tries", "outer", "inner", "content", "top", "list", "dock", "scroll", "screen", "to"} {
+		line += " " + k + "=" + Sanitize(r.URL.Query().Get(k))
+	}
+	if f, err := os.OpenFile(s.LogPath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o600); err == nil {
+		f.WriteString(time.Now().Format("2006/01/02 15:04:05") + " " + line + "\n")
+		f.Close()
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

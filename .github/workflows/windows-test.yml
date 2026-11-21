@@ -551,6 +551,7 @@ jobs:
           }
           Shot 'cccc3333' 'window-running' 8
           Shot 'aaaa1111' 'window-finished' 14
+          foreach ($f in "$env:TEMP\fileion-installer.log", "$env:RUNNER_TEMP\fileion-installer.log") { if (Test-Path $f) { Copy-Item $f C:\ftest\out\window-installer.log -ErrorAction SilentlyContinue; break } }   # has the 'window fit:' lines
           "v0.2.0 first run: $($s1 -join ' x '), v0.2.0 after a big window was saved: $($s2 -join ' x '), this build: $($s3 -join ' x ')" | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           if (-not $s3 -or [Math]::Abs($s3[0] - 720) -gt 24 -or $s3[1] -gt 330 -or $s3[1] -lt 200) { Write-Error "window is $($s3 -join ' x '), want about 720 wide and 200 to 330 high (a 1-app list, no empty gap)"; exit 1 }
       - name: Keep the window screenshots
@@ -558,7 +559,7 @@ jobs:
         uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
         with:
           name: window-screenshots
-          path: C:\ftest\out\window-*.png
+          path: C:\ftest\out\window-*
           if-no-files-found: warn
 
   wait-detect:
