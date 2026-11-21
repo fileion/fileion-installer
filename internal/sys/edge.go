@@ -42,7 +42,11 @@ func SeedProfile(localAppData string) (string, error) {
 	dir := filepath.Join(ProfileDir(localAppData), "Default")
 	file := filepath.Join(dir, "Preferences")
 	prefs := map[string]any{}
-	if b, err := os.ReadFile(file); err == nil {
+	b, err := os.ReadFile(file)
+	if err != nil && !os.IsNotExist(err) {
+		return "", fmt.Errorf("could not read the profile's Preferences (left as it is, no seeding): %w", err)
+	}
+	if err == nil {
 		dec := json.NewDecoder(bytes.NewReader(b))
 		dec.UseNumber() // a big integer in Edge's own keys must come back as it was, not rounded through float64
 		if err := dec.Decode(&prefs); err != nil {

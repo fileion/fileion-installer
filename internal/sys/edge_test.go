@@ -75,3 +75,25 @@ func TestSeedingChangesNothingButTheTwoSigninKeysEvenForBigIntegers(t *testing.T
 		t.Fatalf("got  %s\nwant %s", got, want)
 	}
 }
+
+func TestMissingFileIsSeededButAnyOtherReadErrorLeavesItAloneAndSkips(t *testing.T) {
+	la := t.TempDir()
+	file := filepath.Join(ProfileDir(la), "Default", "Preferences")
+	if _, err := SeedProfile(la); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(file); string(b) != `{"signin":{"allowed":false,"allowed_on_next_startup":false}}` {
+		t.Fatalf("%s", b)
+	}
+	// unreadable for a reason other than "does not exist" (a directory stands in for a locked file): no seeding, nothing replaced
+	os.Remove(file)
+	if err := os.Mkdir(file, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SeedProfile(la); err == nil {
+		t.Fatal("must skip with an error the caller only logs")
+	}
+	if fi, err := os.Stat(file); err != nil || !fi.IsDir() {
+		t.Fatal("the unreadable Preferences was replaced")
+	}
+}
