@@ -12,7 +12,9 @@ import (
 
 // What only Windows has (portable apps, interactive setups, the taskbar): here these exist so the packages build and test anywhere.
 
-func ExecJob(ctx context.Context, name string, args []string) error { return Exec(ctx, name, args) }
+func ExecJob(ctx context.Context, name string, args []string, leave <-chan struct{}) error {
+	return Exec(ctx, name, args)
+}
 
 func FrontWindow() {}
 

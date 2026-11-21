@@ -10,6 +10,9 @@
 //	               finishing) and then writes the Uninstall entry {FILEION-INT-OK}
 //	int-closed.exe exits at once without installing (the person closed the setup window)
 //	int-hang.exe   never returns
+//	int-linger.exe installs ({FILEION-INT-LINGER}), then launches "the app" (itself with /LINGER, which just stays open for ten minutes) and exits: a
+//	               setup that ends with "Launch the app", so its job never empties
+//	run-marker.exe writes C:\ftest\run-marker.txt: "high" when it runs elevated, "medium" when it does not (a portable app started with Run must be medium)
 package main
 
 import (
@@ -26,6 +29,21 @@ func main() {
 		return
 	case strings.HasPrefix(exe, "int-hang"):
 		time.Sleep(time.Hour)
+	case strings.HasPrefix(exe, "run-marker"):
+		out, _ := exec.Command("whoami", "/groups").Output()
+		level := "medium"
+		if strings.Contains(string(out), "High Mandatory Level") {
+			level = "high"
+		}
+		os.WriteFile(`C:\ftest\run-marker.txt`, []byte(level), 0o644)
+		return
+	case strings.HasPrefix(exe, "int-linger"):
+		if len(os.Args) > 1 && os.Args[1] == "/LINGER" {
+			time.Sleep(10 * time.Minute)
+			return
+		}
+		os.Args = []string{os.Args[0], "/S", "/CODE={FILEION-INT-LINGER}", "/VERSION=1.0"}
+		defer func() { exec.Command(exe0(), "/LINGER").Start() }()
 	case strings.HasPrefix(exe, "int-ok"):
 		if len(os.Args) > 1 && os.Args[1] == "/CHILD" {
 			for { // the person finishing the setup: the harness creates the marker
@@ -69,3 +87,5 @@ func main() {
 		}
 	}
 }
+
+func exe0() string { p, _ := os.Executable(); return p }

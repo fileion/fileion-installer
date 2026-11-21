@@ -71,8 +71,8 @@ footer a{color:var(--link)}
 </div>
 <div id="dock">
 <div class="actions">
-<div class="l"><a id="log" href="log" target="_blank" rel="noopener">View log</a><button id="share" class="linkbtn" type="button" aria-label="Share Fileion Installer" hidden>Share Fileion Installer</button><a id="report" href="https://fileion.com/installer-help#report" target="_blank" rel="noopener" hidden>Report a problem</a><button id="logfolder" class="linkbtn" type="button" hidden>Open log folder</button></div>
-<div class="r"><span class="confirm" id="confirm" role="alertdialog" aria-label="Stop after the current app?" hidden><span>Stop after the current app?</span><button id="stop" type="button">Stop</button><button id="keep" type="button" class="primary">Keep going</button></span><button id="retry" type="button" hidden>Retry failed apps</button><button id="close" type="button">Cancel</button></div>
+<div class="l"><a id="log" href="log" target="_blank" rel="noopener">View log</a><button id="share" class="linkbtn" type="button" aria-label="Share Fileion Installer" hidden>Share Fileion Installer</button><a id="report" href="https://fileion.com/installer-help#report_a_problem" target="_blank" rel="noopener" hidden>Report a problem</a><button id="logfolder" class="linkbtn" type="button" hidden>Open log folder</button></div>
+<div class="r"><span class="confirm" id="confirm" role="alertdialog" aria-label="Stop after the current app?" hidden><span>Stop after the current app?<span id="stopnote" hidden> Its setup window will be closed.</span></span><button id="stop" type="button">Stop</button><button id="keep" type="button" class="primary">Keep going</button></span><button id="retry" type="button" hidden>Retry failed apps</button><button id="close" type="button">Cancel</button></div>
 </div>
 <footer>
 <p>Sends Fileion one anonymous count (apps worked / failed) when the run ends, nothing else.</p>
@@ -113,7 +113,7 @@ addEventListener('resize',()=>{if(outerWidth<MINW){try{resizeTo(MINW,outerHeight
 
 // ---- Cancel: one line (Stop / Keep going); Esc and the window's own close do the same
 function askStop(show){
- const c=$('confirm');
+ const c=$('confirm');$('stopnote').hidden=!(state&&(state.rows||[]).some(r=>r.status==='yourturn'||r.status==='notfinished'));
  c.hidden=!show;$('close').hidden=show;
  if(show)$('keep').focus();else if(!state||!state.finished)$('close').focus();
 }

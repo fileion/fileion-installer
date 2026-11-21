@@ -188,8 +188,21 @@ func FindExe(dir, hint string) string {
 	return ""
 }
 
+// IsLink says whether a path is a symlink or a junction (or any other reparse point Go does not treat as a plain file or folder). The installer runs
+// as administrator, so it never writes through one: a link under Fileion Apps could send an elevated write anywhere.
+func IsLink(path string) bool {
+	fi, err := os.Lstat(path)
+	return err == nil && fi.Mode()&(os.ModeSymlink|os.ModeIrregular) != 0
+}
+
 // Move puts a folder somewhere else: a rename when it can, else a copy and then removing the old one (a move to another drive).
 func Move(src, dst string) error {
+	if rel, err := filepath.Rel(src, dst); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return errors.New("a folder cannot be moved into itself")
+	}
+	if IsLink(src) || IsLink(filepath.Dir(dst)) {
+		return errors.New("that folder is a link, so nothing was moved")
+	}
 	if _, err := os.Stat(dst); err == nil {
 		return fmt.Errorf("%s already exists", dst)
 	}

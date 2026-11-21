@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -313,7 +314,7 @@ func (s *Server) answer(i int, a string) {
 // Ask waits for the person's Retry or Skip on row i ("skip" when the run is stopped or ctx ends).
 func (s *Server) Ask(ctx context.Context, i int) string {
 	s.mu.Lock()
-	c := s.ask[i]
+	c, stopCh := s.ask[i], s.stopCh
 	s.mu.Unlock()
 	if c == nil {
 		return "skip"
@@ -324,7 +325,7 @@ func (s *Server) Ask(ctx context.Context, i int) string {
 	select {
 	case a := <-c:
 		return a
-	case <-s.stopCh:
+	case <-stopCh:
 	case <-ctx.Done():
 	}
 	return "skip"
@@ -338,9 +339,13 @@ func (s *Server) Stop() {
 		close(c)
 		delete(s.armed, i)
 	}
+	stopCh, once := s.stopCh, &s.stopOnce
 	s.mu.Unlock()
-	s.stopOnce.Do(func() { close(s.stopCh) })
+	once.Do(func() { close(stopCh) })
 }
+
+// Polled says whether the window has asked for the state at least once.
+func (s *Server) Polled() bool { s.mu.Lock(); defer s.mu.Unlock(); return s.polled }
 
 // Stopping says whether Stop was chosen.
 func (s *Server) Stopping() bool { s.mu.Lock(); defer s.mu.Unlock(); return s.state.Stopping }
@@ -351,7 +356,8 @@ func (s *Server) Retried() <-chan struct{} { return s.retry }
 // Reopen makes a finished run a running one again (for the retry of the failed apps).
 func (s *Server) Reopen() {
 	s.mu.Lock()
-	s.state.Finished, s.state.Note = false, ""
+	s.state.Finished, s.state.Note, s.state.Stopping = false, "", false
+	s.stopCh, s.stopOnce = make(chan struct{}), sync.Once{} // a Stop before the retry must not stop the retry
 	s.mu.Unlock()
 }
 
@@ -375,10 +381,15 @@ func (s *Server) Row(i int) (Row, bool) {
 }
 
 // Redirect tells the Preparing page to move to the elevated installer's window (only a local address is accepted).
-func (s *Server) Redirect(url string) {
-	if !strings.HasPrefix(url, "http://127.0.0.1:") {
+func (s *Server) Redirect(raw string) {
+	u, err := neturl.Parse(raw)
+	if err != nil || u.Scheme != "http" || u.User != nil || u.Hostname() != "127.0.0.1" || !strings.HasPrefix(u.Path, "/t/") {
 		return
 	}
+	if port, err := strconv.Atoi(u.Port()); err != nil || port < 1 || port > 65535 {
+		return
+	}
+	url := u.String()
 	s.mu.Lock()
 	s.state.Redirect = url
 	s.mu.Unlock()

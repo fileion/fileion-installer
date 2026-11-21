@@ -353,3 +353,50 @@ func TestThePageHasTheV030Controls(t *testing.T) {
 		t.Error("SignPath text in the page")
 	}
 }
+
+func TestRedirectParsesTheAddressAndReopenForgetsAStop(t *testing.T) {
+	s, url, _ := New(t.TempDir()+"/log", true)
+	for _, bad := range []string{"http://127.0.0.1:80@evil.com/t/x/", "http://127.0.0.1.evil.com:80/t/x/", "http://127.0.0.1/t/x/", "http://127.0.0.1:abc/t/x/", "http://127.0.0.1:5000/x/", "https://127.0.0.1:5000/t/x/", "http://user@127.0.0.1:5000/t/x/", "http://localhost:5000/t/x/"} {
+		s.Redirect(bad)
+		s.mu.Lock()
+		got := s.state.Redirect
+		s.mu.Unlock()
+		if got != "" {
+			t.Fatalf("%q was accepted", bad)
+		}
+	}
+	s.Redirect("http://127.0.0.1:5000/t/abc/")
+
+	s.SetApps([]string{"A"})
+	post(t, url+"stop")
+	if !s.Stopping() {
+		t.Fatal("Stop did not stop")
+	}
+	s.Finish(0, 1)
+	s.Reopen()
+	if s.Stopping() {
+		t.Fatal("a Stop before the retry still stops the retry")
+	}
+	s.Update(0, "notfinished", "", "")
+	go func() { time.Sleep(30 * time.Millisecond); post(t, url+"row/retry?i=0") }()
+	if got := s.Ask(context.Background(), 0); got != "retry" {
+		t.Fatalf("after Reopen Ask = %q, want the person's retry", got)
+	}
+	if c := s.Arm(0); func() bool {
+		select {
+		case <-c:
+			return true
+		default:
+			return false
+		}
+	}() {
+		t.Fatal("a row armed after the retry is already stopped")
+	}
+	if s.Polled() {
+		t.Fatal("polled before anyone asked")
+	}
+	http.Get(url + "state")
+	if !s.Polled() {
+		t.Fatal("not polled after a request for the state")
+	}
+}

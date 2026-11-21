@@ -105,3 +105,25 @@ func TestMoveAndMoveFile(t *testing.T) {
 		t.Fatal("source left")
 	}
 }
+
+func TestMoveRefusesItsOwnSubfolderAndALink(t *testing.T) {
+	d := t.TempDir()
+	src := filepath.Join(d, "App")
+	os.MkdirAll(src, 0o755)
+	if err := Move(src, filepath.Join(src, "inner", "App")); err == nil {
+		t.Fatal("moved a folder into itself")
+	}
+	if err := Move(src, src); err == nil {
+		t.Fatal("moved a folder onto itself")
+	}
+	link := filepath.Join(d, "link")
+	if err := os.Symlink(d, link); err != nil {
+		t.Skip("no symlinks here")
+	}
+	if !IsLink(link) || IsLink(src) {
+		t.Fatal("IsLink")
+	}
+	if err := Move(src, filepath.Join(link, "App")); err == nil {
+		t.Fatal("moved through a link")
+	}
+}

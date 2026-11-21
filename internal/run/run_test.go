@@ -740,3 +740,85 @@ func TestAnUnknownModeIsNotRunAndOrderForRunPutsInteractiveLast(t *testing.T) {
 		t.Fatalf("order = %s, want bcead", names)
 	}
 }
+
+func TestAnInteractiveSetupThatLeavesTheAppRunningIsDoneAfterAGraceAndNothingIsKilled(t *testing.T) {
+	s := &spy{}
+	body := []byte("vendor setup")
+	srv := server(t, body, s)
+	var installed atomic.Bool
+	r := newRunner(t, srv, func(manifest.App) (string, bool) { return "2.0.0", installed.Load() }, s)
+	r.PollEvery, r.Grace = 10*time.Millisecond, 60*time.Millisecond
+	killed := false
+	r.ExecJob = func(ctx context.Context, name string, args []string, leave <-chan struct{}) error {
+		installed.Store(true) // the setup installs, then launches the app and its window stays in the job
+		select {
+		case <-leave:
+			return nil // released, not ended
+		case <-ctx.Done():
+			killed = true
+			return ctx.Err()
+		}
+	}
+	start := time.Now()
+	res := r.RunApp(context.Background(), interactiveApp(srv, sum(body)))
+	if res.Status != Done || !strings.Contains(res.Message, "still open") {
+		t.Fatalf("status = %s (%s)", res.Status, res.Message)
+	}
+	if killed || time.Since(start) > 5*time.Second {
+		t.Fatalf("killed %v after %v", killed, time.Since(start))
+	}
+}
+
+func TestSkipOrStopAfterTheAppIsInstalledIsDoneAndStopOnAnOpenSetupSaysStopped(t *testing.T) {
+	s := &spy{hang: true}
+	body := []byte("vendor setup")
+	srv := server(t, body, s)
+	var installed atomic.Bool
+	r := newRunner(t, srv, func(manifest.App) (string, bool) { return "2.0.0", installed.Load() }, s)
+	r.PollEvery, r.Grace = time.Hour, time.Hour // the registry is not polled: only the check after Skip sees the app
+	skip := make(chan struct{})
+	r.Arm = func(manifest.App) <-chan struct{} { return skip }
+	r.Progress = func(_ manifest.App, st Status, _ string, _ string) {
+		if st == YourTurn {
+			go func() { time.Sleep(30 * time.Millisecond); installed.Store(true); close(skip) }()
+		}
+	}
+	if res := r.RunApp(context.Background(), interactiveApp(srv, sum(body))); res.Status != Done {
+		t.Fatalf("Skip after the app was installed gave %s", res.Status)
+	}
+
+	s2 := &spy{hang: true}
+	srv2 := server(t, body, s2)
+	r2 := newRunner(t, srv2, notInstalled, s2)
+	skip2 := make(chan struct{})
+	r2.Arm = func(manifest.App) <-chan struct{} { return skip2 }
+	r2.Stopped = func() bool { return true }
+	r2.Progress = func(_ manifest.App, st Status, _ string, _ string) {
+		if st == YourTurn {
+			go func() { time.Sleep(30 * time.Millisecond); close(skip2) }()
+		}
+	}
+	if res := r2.RunApp(context.Background(), interactiveApp(srv2, sum(body))); res.Status != Cancelled || res.Message != "Stopped" {
+		t.Fatalf("Stop gave %s %q, want Cancelled Stopped", res.Status, res.Message)
+	}
+}
+
+func TestAPortableFolderThatIsALinkIsNotWrittenThrough(t *testing.T) {
+	s := &spy{}
+	body := []byte("MZ")
+	srv := server(t, body, s)
+	r := portableRunner(t, srv, s)
+	outside := t.TempDir()
+	os.MkdirAll(r.AppsDir, 0o755)
+	if err := os.Symlink(outside, filepath.Join(r.AppsDir, "Test")); err != nil {
+		t.Skip("no symlinks here")
+	}
+	a := app(srv, sum(body))
+	a.Mode, a.WingetID, a.SilentSwitch = "portable", "L.L", ""
+	if res := r.RunApp(context.Background(), a); res.Status != Failed {
+		t.Fatalf("status = %s", res.Status)
+	}
+	if left, _ := filepath.Glob(filepath.Join(outside, "*")); len(left) != 0 {
+		t.Fatalf("wrote through the link: %v", left)
+	}
+}

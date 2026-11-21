@@ -69,7 +69,7 @@ jobs:
           Write-Manifest 'bbbb2222' (App 2 'Test Wrong Hash' '{FILEION-TEST-2}' '/S /CODE={FILEION-TEST-2}' ('0' * 64))
           Write-Manifest 'cccc3333' (App 3 'Test Hang' '{FILEION-TEST-3}' '/HANG' $sha)
           # v0.3.0 modes: portable, zip, interactive ("a few clicks"). A non-silent row carries NO silent switch, as the server contract says.
-          foreach ($n in 'int-ok', 'int-closed', 'int-hang') { Copy-Item C:\ftest\www\fakeapp.exe "C:\ftest\www\$n.exe" }
+          foreach ($n in 'int-ok', 'int-closed', 'int-hang', 'int-linger', 'run-marker') { Copy-Item C:\ftest\www\fakeapp.exe "C:\ftest\www\$n.exe" }
           $tmp = 'C:\ftest\ziptmp'; New-Item -ItemType Directory -Force $tmp | Out-Null; Copy-Item C:\ftest\www\fakeapp.exe "$tmp\tool.exe"
           Compress-Archive -Path "$tmp\tool.exe" -DestinationPath C:\ftest\www\tool.zip -Force
           $zsha = (Get-FileHash C:\ftest\www\tool.zip -Algorithm SHA256).Hash.ToLower()
@@ -84,6 +84,9 @@ jobs:
           Write-Manifest 'iiii3333' @((ModeApp 21 'Test Interactive' 'interactive' 'int-ok.exe' $ish 'exe' '{FILEION-INT-OK}'), (ModeApp 22 'Test Silent Last' 'silent' 'fakeapp.exe' $sha 'exe' '{FILEION-TEST-22}' | ForEach-Object { $_.silent_switch = '/S /CODE={FILEION-TEST-22}'; $_ }))
           Write-Manifest 'iiii4444' (ModeApp 23 'Test Closed' 'interactive' 'int-closed.exe' (Get-FileHash C:\ftest\www\int-closed.exe -Algorithm SHA256).Hash.ToLower() 'exe' '{FILEION-INT-CLOSED}')
           Write-Manifest 'iiii5555' (ModeApp 24 'Test Hang Setup' 'interactive' 'int-hang.exe' (Get-FileHash C:\ftest\www\int-hang.exe -Algorithm SHA256).Hash.ToLower() 'exe' '{FILEION-INT-HANG}')
+          Write-Manifest 'iiii8888' (ModeApp 25 'Test Linger' 'interactive' 'int-linger.exe' (Get-FileHash C:\ftest\www\int-linger.exe -Algorithm SHA256).Hash.ToLower() 'exe' '{FILEION-INT-LINGER}')
+          # a portable app first, then an interactive setup that never returns: the run stays open on "Your turn", so the window's own buttons can be pressed
+          Write-Manifest 'mmmm1111' @((ModeApp 41 'Test Marker' 'portable' 'run-marker.exe' (Get-FileHash C:\ftest\www\run-marker.exe -Algorithm SHA256).Hash.ToLower() 'portable' $null), (ModeApp 42 'Test Hang Setup' 'interactive' 'int-hang.exe' (Get-FileHash C:\ftest\www\int-hang.exe -Algorithm SHA256).Hash.ToLower() 'exe' '{FILEION-INT-HANG}'))
           # what an older installer (v0.2.0) must do with these: run only the silent row, start nothing else
           Write-Manifest 'oooo6666' @((ModeApp 31 'Old Portable' 'portable' 'fakeapp.exe' $sha 'portable' $null), $z, (ModeApp 33 'Old Interactive' 'interactive' 'int-ok.exe' $ish 'exe' '{FILEION-INT-OK}'), (App 34 'Old Silent' '{FILEION-TEST-OLD}' '/S /CODE={FILEION-TEST-OLD}' $sha | ForEach-Object { $_.mode = 'silent'; $_ }))
           Write-Manifest 'dddd4444' (App 4 'Test No Admin' '{FILEION-TEST-4}' '/S /CODE={FILEION-TEST-4}' $sha)
@@ -312,6 +315,41 @@ jobs:
             $bad | ConvertTo-Json -Depth 5 | Set-Content C:\ftest\www\setup\manifest\iiii7777 -Encoding utf8
             $out = Inst $installer ($common + @('-code','iiii7777')); $c17 = $script:LASTEXIT
             Check 'interactive: a wrong hash is refused before any setup window opens' ($c17 -eq 1 -and $out -match 'mismatch' -and $out -notmatch 'yourturn') "exit $c17"
+
+            # 18a. a setup that installs, launches the app and exits: its job never empties, so the installer must go on (Done) after a short grace, and NOT kill the app
+            Get-Process -Name 'int-linger' -ErrorAction SilentlyContinue | Stop-Process -Force
+            $p = Start-Inst 'iiii8888' 'case18a-linger'
+            $ended = $p.WaitForExit(120000)
+            $alive = @(Get-Process -Name 'int-linger' -ErrorAction SilentlyContinue).Count
+            Get-Process -Name 'int-linger' -ErrorAction SilentlyContinue | Stop-Process -Force
+            Check 'interactive: a setup that leaves the launched app running is Done, and the app is not killed' ($ended -and $p.ExitCode -eq 0 -and ((Get-Content C:\ftest\out\case18a-linger.txt -Raw) -match 'done') -and $alive -ge 1) "ended: $ended, app still running: $alive"
+
+            # 18b. hand-off: the elevated copy writes its window's address to the file it was given
+            Remove-Item C:\ftest\h.txt -ErrorAction SilentlyContinue
+            $out = Inst $installer ($common + @('-code','aaaa1111','-handoff','C:\ftest\h.txt')); $c18b = $script:LASTEXIT
+            $h = Get-Content C:\ftest\h.txt -Raw -ErrorAction SilentlyContinue
+            Check 'hand-off: the elevated copy writes its own window address' ($c18b -eq 0 -and $h -match '^http://127\.0\.0\.1:\d+/t/[0-9a-f]+/$') "exit $c18b, address: $h"
+
+            # 18c. the window's own buttons on a portable row (Run as the user, Move…) and Stop on an open setup, through the window's local address
+            Remove-Item "$apps\Test Marker", C:\ftest\moveto, C:\ftest\run-marker.txt -Recurse -Force -ErrorAction SilentlyContinue
+            New-Item -ItemType Directory -Force C:\ftest\moveto | Out-Null
+            $env:FILEION_INSTALLER_TEST_PICK = 'C:\ftest\moveto'
+            $p = Start-Inst 'mmmm1111' 'case18c-buttons'
+            $turn = Wait-Log 'yourturn' 60
+            $url = Window-Url
+            Invoke-WebRequest "${url}row/run?i=0" -Method Post -UseBasicParsing | Out-Null
+            $end = (Get-Date).AddSeconds(30); while (-not (Test-Path C:\ftest\run-marker.txt) -and (Get-Date) -lt $end) { Start-Sleep -Milliseconds 300 }
+            $level = Get-Content C:\ftest\run-marker.txt -Raw -ErrorAction SilentlyContinue
+            Check 'Run starts a portable app as the normal user, not as administrator' ($turn -and $level -eq 'medium') "started at the $level level"
+            Invoke-WebRequest "${url}row/move?i=0" -Method Post -UseBasicParsing | Out-Null
+            $end = (Get-Date).AddSeconds(30); while (-not (Test-Path 'C:\ftest\moveto\Test Marker\run-marker.exe') -and (Get-Date) -lt $end) { Start-Sleep -Milliseconds 300 }
+            $listed = Select-String -Path "$env:LOCALAPPDATA\Fileion\portable.json" -Pattern 'moveto' -Quiet
+            Check 'Move puts the app in the chosen folder and the list follows it' ((Test-Path 'C:\ftest\moveto\Test Marker\run-marker.exe') -and -not (Test-Path "$apps\Test Marker") -and $listed) "moved: $(Test-Path 'C:\ftest\moveto\Test Marker\run-marker.exe'), listed: $listed"
+            Remove-Item Env:FILEION_INSTALLER_TEST_PICK -ErrorAction SilentlyContinue
+            Invoke-WebRequest "${url}stop" -Method Post -UseBasicParsing | Out-Null
+            $ended = $p.WaitForExit(30000)
+            $left = @(Get-Process -Name 'int-hang' -ErrorAction SilentlyContinue).Count
+            Check 'Stop ends an open setup, says Stopped and leaves nothing running' ($ended -and $p.ExitCode -eq 0 -and ((Get-Content C:\ftest\out\case18c-buttons.txt -Raw) -match 'cancelled') -and $left -eq 0) "ended: $ended, processes left: $left"
             Remove-Item Env:FILEION_INSTALLER_ELEVATED -ErrorAction SilentlyContinue
           }
 

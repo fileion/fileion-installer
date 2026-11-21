@@ -80,8 +80,11 @@ type Runner struct {
 	// Portable keeps the list of portable and zip apps; AppsDir is the folder their own folders go in (Downloads\Fileion Apps).
 	Portable *portable.Store
 	AppsDir  string
-	// ExecJob runs a program and waits until it and everything it started has ended (Windows: a job object). Nil = Exec.
-	ExecJob func(ctx context.Context, name string, args []string) error
+	// ExecJob runs a program and waits until it and everything it started has ended (Windows: a job object). When leave is closed it stops
+	// waiting and returns WITHOUT ending anything (an app the setup launched at its end keeps running). Nil = Exec.
+	ExecJob func(ctx context.Context, name string, args []string, leave <-chan struct{}) error
+	// Stopped says whether the person chose Stop (so a closed setup is "Stopped", not "Skipped by you"); may be nil.
+	Stopped func() bool
 	// Front brings the window to the front and flashes its taskbar button, when it is the person's turn (may be nil).
 	Front func()
 	// Arm returns a channel that is closed when the person presses Skip (or Stop) for this app; nil = never.
@@ -199,6 +202,12 @@ func (r *Runner) appFolder(a manifest.App) (string, error) {
 		return "", errors.New("no folder for portable apps")
 	}
 	dir := filepath.Join(r.AppsDir, portable.SafeName(a.Name))
+	if err := os.MkdirAll(r.AppsDir, 0o755); err != nil {
+		return "", err
+	}
+	if portable.IsLink(r.AppsDir) || portable.IsLink(dir) { // elevated: never write through a symlink or junction
+		return "", errors.New("it is a link, so nothing was written there")
+	}
 	return dir, os.MkdirAll(dir, 0o755)
 }
 
@@ -224,6 +233,9 @@ func (r *Runner) placePortable(a manifest.App, file string) Result {
 		name += ".exe"
 	}
 	target := filepath.Join(dir, name)
+	if portable.IsLink(target) {
+		return Result{Status: Failed, Message: "Could not save the file: its place is a link"}
+	}
 	if err := portable.MoveFile(file, target); err != nil {
 		return Result{Status: Failed, Message: "Could not save the file: " + err.Error()}
 	}
@@ -249,14 +261,34 @@ func (r *Runner) unpackZip(a manifest.App, file string) Result {
 // tree is waited for (a setup that starts another program and exits is still waited for), then the registry decides: installed is Done, else
 // "Not finished" and Retry or Skip. Skip (or Stop) ends the setup and moves on, so nothing can hang.
 func (r *Runner) runInteractive(ctx context.Context, a manifest.App, name string, args []string) Result {
-	limit := r.AppTimeout
+	limit, poll, grace := r.AppTimeout, r.PollEvery, r.Grace
 	if limit < 30*time.Minute { // a person takes their time: at least half an hour
 		limit = 30 * time.Minute
 	}
-	run := r.ExecJob
-	if run == nil {
-		run = r.Exec
+	if poll <= 0 {
+		poll = 4 * time.Second
 	}
+	if grace <= 0 {
+		grace = 30 * time.Second
+	}
+	run := func(c context.Context, n string, ar []string, leave <-chan struct{}) error {
+		if r.ExecJob != nil {
+			return r.ExecJob(c, n, ar, leave)
+		}
+		done := make(chan error, 1)
+		go func() { done <- r.Exec(c, n, ar) }()
+		select {
+		case err := <-done:
+			return err
+		case <-leave:
+			return nil
+		}
+	}
+	present := func() (string, bool) {
+		v, found := r.Installed(a)
+		return v, found && AtLeast(v, a.MinVersion)
+	}
+	done := Result{Status: Done, Message: "Installed " + strings.TrimSpace(a.Version)}
 	for {
 		r.say(a, YourTurn, "Your turn: finish "+a.Name+"’s setup window", "")
 		if r.Front != nil {
@@ -277,23 +309,64 @@ func (r *Runner) runInteractive(ctx context.Context, a manifest.App, name string
 			case <-stop:
 			}
 		}()
-		err := run(runCtx, name, args)
+		leave := make(chan struct{})
+		ended := make(chan error, 1)
+		go func() { ended <- run(runCtx, name, args, leave) }()
+		// While the setup is open the registry is looked at, as for a silent installer: a setup that ends with "Launch the app" leaves the app (and
+		// so the job) running although the app is installed. Once found, the setup gets a short time to end by itself, then it is left alone, not killed.
+		tick := time.NewTicker(poll)
+		var err error
+		left := false
+	wait:
+		for {
+			select {
+			case err = <-ended:
+				break wait
+			case <-tick.C:
+				if v, ok := present(); ok {
+					if r.Log != nil {
+						r.Log("%s: detected as installed at %s while its setup is still open; waiting up to %s for it to end", a.Name, v, grace)
+					}
+					select {
+					case err = <-ended:
+					case <-time.After(grace):
+						close(leave)
+						left = true
+						err = <-ended
+						if r.Log != nil {
+							r.Log("%s: its setup is still open after %s and is left running (not killed): the app is installed", a.Name, grace)
+						}
+					case <-runCtx.Done():
+						err = <-ended
+					}
+					break wait
+				}
+			}
+		}
+		tick.Stop()
 		timedOut := errors.Is(runCtx.Err(), context.DeadlineExceeded)
 		close(stop)
 		end()
 		if r.Log != nil {
 			r.Log("%s: its setup window ended (%v)", a.Name, err)
 		}
+		_, installed := present()
 		switch {
 		case ctx.Err() != nil:
 			return Result{Status: Cancelled, Message: "Stopped"}
+		case installed && left:
+			d := done
+			d.Message += " (its setup is still open: you can close it)"
+			return d
+		case installed:
+			return done // also when Skip or Stop came a moment after the app was installed
 		case skipped.Load():
+			if r.Stopped != nil && r.Stopped() {
+				return Result{Status: Cancelled, Message: "Stopped"}
+			}
 			return Result{Status: Skipped, Message: "Skipped by you"}
 		case timedOut:
 			return Result{Status: Manual, Message: "Skipped: needs manual install"}
-		}
-		if v, found := r.Installed(a); found && AtLeast(v, a.MinVersion) {
-			return Result{Status: Done, Message: "Installed " + strings.TrimSpace(a.Version)}
 		}
 		r.say(a, NotFinished, "Setup window closed before the app installed", "")
 		answer := "skip"
@@ -304,6 +377,9 @@ func (r *Runner) runInteractive(ctx context.Context, a manifest.App, name string
 			return Result{Status: Cancelled, Message: "Stopped"}
 		}
 		if answer != "retry" {
+			if r.Stopped != nil && r.Stopped() {
+				return Result{Status: Cancelled, Message: "Stopped"}
+			}
 			return Result{Status: Skipped, Message: "Skipped by you"}
 		}
 	}

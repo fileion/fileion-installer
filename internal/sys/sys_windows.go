@@ -298,11 +298,12 @@ func UserDirs() (downloads, programs, localAppData string) {
 
 // ExecJob runs a program inside a job object and waits until the program and everything it started have ended, so a setup that starts the real
 // setup and exits is still waited for. When ctx ends the whole job is ended. The program's own windows are shown.
-func ExecJob(ctx context.Context, name string, args []string) error {
+func ExecJob(ctx context.Context, name string, args []string, leave <-chan struct{}) error {
 	job, _, _ := createJobObject.Call(0, 0)
 	if job == 0 {
 		return Exec(ctx, name, args)
 	}
+	// The job has no kill-on-close limit: closing its handle (leave, or the return) ends nothing
 	defer syscall.CloseHandle(syscall.Handle(job))
 	// The program starts SUSPENDED, is put in the job, and only then runs: nothing it starts can be outside the job.
 	cmd := exec.Command(name, args...)
@@ -323,7 +324,7 @@ func ExecJob(ctx context.Context, name string, args []string) error {
 	}
 	ntResumeProcess.Call(uintptr(h))
 	if !inJob {
-		return waitTree(ctx, cmd)
+		return waitTree(ctx, cmd, leave)
 	}
 	waited := make(chan error, 1)
 	go func() { waited <- cmd.Wait() }()
@@ -339,6 +340,8 @@ func ExecJob(ctx context.Context, name string, args []string) error {
 		case <-ctx.Done():
 			terminateJob.Call(job, 1)
 			return ctx.Err()
+		case <-leave:
+			return nil
 		case <-tick.C:
 		}
 		if haveMain && jobActive(job) == 0 {
@@ -360,12 +363,14 @@ func jobActive(job uintptr) uint32 {
 }
 
 // waitTree is the fallback when the program cannot be put in a job: wait for it alone, and end its tree on ctx.
-func waitTree(ctx context.Context, cmd *exec.Cmd) error {
+func waitTree(ctx context.Context, cmd *exec.Cmd, leave <-chan struct{}) error {
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	select {
 	case err := <-done:
 		return err
+	case <-leave:
+		return nil
 	case <-ctx.Done():
 		exec.Command("taskkill", "/T", "/F", "/PID", strconv.Itoa(cmd.Process.Pid)).Run()
 		<-done
@@ -428,6 +433,9 @@ func powershell(env []string, script string) ([]byte, error) {
 
 // PickFolder shows the Windows folder picker and returns the chosen folder ("" when cancelled).
 func PickFolder(title string) (string, error) {
+	if d := os.Getenv("FILEION_INSTALLER_TEST_PICK"); d != "" { // the test harness has no one to click the dialog
+		return d, nil
+	}
 	out, err := powershell([]string{"FI_TITLE=" + title}, `Add-Type -AssemblyName System.Windows.Forms; $d = New-Object System.Windows.Forms.FolderBrowserDialog; $d.Description = $env:FI_TITLE; if ($d.ShowDialog() -eq 'OK') { [Console]::Out.Write($d.SelectedPath) }`)
 	return strings.TrimSpace(string(out)), err
 }

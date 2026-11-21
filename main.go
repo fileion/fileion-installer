@@ -113,6 +113,11 @@ func main() {
 		os.Exit(elevateAndWait(logger, win, *noWindow, logPath, os.Args[1:]))
 	}
 
+	// The elevated copy must not install where nobody can see it: if the window was closed during the permission prompt, nothing starts
+	if elevated && !*noWindow && !waitForWindow(win, 30*time.Second) {
+		logger.Printf("stopped: the window was closed while Windows asked for permission, so nothing was installed")
+		os.Exit(1)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() { <-win.Closed; cancel() }()
@@ -184,7 +189,7 @@ func main() {
 	win.RowAction = pf.rowAction(win)
 	r := &run.Runner{Client: client, TempDir: os.TempDir(), Installed: sys.Installed, Exec: sys.Exec,
 		AppTimeout: *appTimeout, Log: logger.Printf,
-		Portable: pf.store, AppsDir: pf.appsDir, ExecJob: sys.ExecJob, Front: sys.FrontWindow,
+		Portable: pf.store, AppsDir: pf.appsDir, ExecJob: sys.ExecJob, Front: sys.FrontWindow, Stopped: win.Stopping,
 		Arm:      func(a manifest.App) <-chan struct{} { return win.Arm(index[a.ID]) },
 		Ask:      func(ctx context.Context, a manifest.App) string { return win.Ask(ctx, index[a.ID]) },
 		Placed:   func(a manifest.App, folder, exe string) { pf.placed(win, index[a.ID], a, folder, exe) },
@@ -257,6 +262,11 @@ func main() {
 // person's own folders, keeps its window on "Preparing" and moves it to the elevated copy's page. It returns the exit code for the process.
 func elevateAndWait(logger *log.Logger, win *ui.Server, headless bool, logPath string, args []string) int {
 	logger.Printf("not an administrator: asking Windows for elevation")
+	if old, _ := filepath.Glob(filepath.Join(os.TempDir(), "fileion-installer-*.handoff")); len(old) > 0 { // left by a copy that died: it holds an address that is gone
+		for _, f := range old {
+			os.Remove(f)
+		}
+	}
 	dl, pr, la := sys.UserDirs()
 	hand := filepath.Join(os.TempDir(), fmt.Sprintf("fileion-installer-%d.handoff", time.Now().UnixNano()))
 	wait, err := sys.RelaunchAsAdmin(append(append([]string{}, args...), "-handoff", hand, "-user-dirs", dl+"|"+pr+"|"+la))
@@ -292,6 +302,18 @@ func elevateAndWait(logger *log.Logger, win *ui.Server, headless bool, logPath s
 	win.Finish(0, 0)
 	waitForClose(win, headless)
 	return 1
+}
+
+// waitForWindow says whether the window asked for its page within d (it did not when it was closed during the permission prompt).
+func waitForWindow(win *ui.Server, d time.Duration) bool {
+	end := time.Now().Add(d)
+	for time.Now().Before(end) {
+		if win.Polled() {
+			return true
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return false
 }
 
 // waitForAction waits, with the run finished, for Close, "Retry failed apps" or a window that is gone.
