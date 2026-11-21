@@ -1,6 +1,7 @@
 package sys
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -42,7 +43,9 @@ func SeedProfile(localAppData string) (string, error) {
 	file := filepath.Join(dir, "Preferences")
 	prefs := map[string]any{}
 	if b, err := os.ReadFile(file); err == nil {
-		if err := json.Unmarshal(b, &prefs); err != nil {
+		dec := json.NewDecoder(bytes.NewReader(b))
+		dec.UseNumber() // a big integer in Edge's own keys must come back as it was, not rounded through float64
+		if err := dec.Decode(&prefs); err != nil {
 			return "", fmt.Errorf("the profile's Preferences is not JSON (left as it is): %w", err)
 		}
 	}
@@ -52,10 +55,13 @@ func SeedProfile(localAppData string) (string, error) {
 	}
 	si["allowed"], si["allowed_on_next_startup"] = false, false
 	prefs["signin"] = si
-	out, err := json.Marshal(prefs)
-	if err != nil {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false) // keep & < > in Edge's strings as they were
+	if err := enc.Encode(prefs); err != nil {
 		return "", err
 	}
+	out := bytes.TrimRight(buf.Bytes(), "\n")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}

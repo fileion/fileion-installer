@@ -60,3 +60,18 @@ func TestSeedingTurnsSignInOffAndKeepsEveryOtherKey(t *testing.T) {
 		t.Fatal("the file was changed")
 	}
 }
+
+func TestSeedingChangesNothingButTheTwoSigninKeysEvenForBigIntegers(t *testing.T) {
+	la := t.TempDir()
+	file := filepath.Join(ProfileDir(la), "Default", "Preferences")
+	os.MkdirAll(filepath.Dir(file), 0o700)
+	os.WriteFile(file, []byte(`{"big":1234567890123456789,"deep":{"unknown":{"x":[1,2.5,"a&b<c>"]}},"signin":{"allowed":true}}`), 0o600)
+	if _, err := SeedProfile(la); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(file)
+	want := `{"big":1234567890123456789,"deep":{"unknown":{"x":[1,2.5,"a&b<c>"]}},"signin":{"allowed":false,"allowed_on_next_startup":false}}`
+	if string(got) != want {
+		t.Fatalf("got  %s\nwant %s", got, want)
+	}
+}
