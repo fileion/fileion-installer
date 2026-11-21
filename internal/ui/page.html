@@ -232,7 +232,7 @@ function render(){
  $('close').className=done&&$('retry').hidden?'primary':'';
  if(s.finished||lost){$('confirm').hidden=true;$('close').hidden=false}
  else if(s.preparing&&!s.note){$('close').hidden=true;$('log').hidden=true} // nothing to cancel yet: Windows' own prompt is up
- if(s.finished&&!focusedEnd&&!lost){focusedEnd=true;(!$('retry').hidden?$('retry'):$('close')).focus({focusVisible:false})}
+ if(s.finished&&!focusedEnd&&!lost)focusedEnd=true; // no script focus: a ring shows only when the person tabs there (:focus-visible)
  const ul=$('list');
  rs.forEach((r,i)=>{
   let t=track[i];if(!t||t.status!==r.status){t=track[i]={status:r.status,at:r.since||now,done:r.done||0,doneAt:now}}
