@@ -18,12 +18,12 @@ import (
 //go:embed page.html
 var page []byte
 
-// The Fileion mark for the window's title bar and taskbar (the page's favicon and web manifest): the same drawing as the .exe icon (tools/mkicon).
+// The Fileion mark for the window's title bar and taskbar (the page's favicon and web manifest): the same images as the .exe icon (winres/icons, packed by tools/mkicon).
 //
 //go:embed icon-32.png icon-64.png icon-192.png icon-512.png
 var icons embed.FS
 
-const manifestJSON = `{"name":"Fileion Installer","short_name":"Fileion Installer","start_url":"./","display":"standalone","background_color":"#ffffff","theme_color":"#7444fd",` +
+const manifestJSON = `{"name":"Fileion Installer","short_name":"Fileion Installer","start_url":"./","display":"standalone","background_color":"#ffffff","theme_color":"#2563eb",` +
 	`"icons":[{"src":"icon-192.png","sizes":"192x192","type":"image/png"},{"src":"icon-512.png","sizes":"512x512","type":"image/png"}]}`
 
 // Row is one app in the list.

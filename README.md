@@ -59,7 +59,7 @@ go run ./tools/stamp -show "My special bundle.exe"             # prints the code
 go run ./tools/stamp -strip "My special bundle.exe" plain.exe  # the release file again
 ```
 
-The Windows icon and version info (Fileion mark, "Fileion Installer", the tag as the version) are built into the .exe by `build.sh` with [go-winres](https://github.com/tc-hib/go-winres) pinned at v0.3.3; the icon is drawn by `tools/mkicon` into `winres/icon.ico`. The stamp is added after the build and touches none of it.
+The Windows icon and version info (Fileion mark, "Fileion Installer", the tag as the version) are built into the .exe by `build.sh` with [go-winres](https://github.com/tc-hib/go-winres) pinned at v0.3.3; the icon is the Fileion software logo, packed by `tools/mkicon` from `winres/icons/` into `winres/icon.ico`. The stamp is added after the build and touches none of it.
 
 ### Options
 
