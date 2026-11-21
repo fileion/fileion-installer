@@ -68,6 +68,7 @@ type Server struct {
 	mu       sync.Mutex
 	state    State
 	lastPoll time.Time
+	hold     bool
 	polled   bool
 	LogPath  string
 	// OpenLog opens the log file itself (set by main; the window uses it after the run ends instead of a localhost link)
@@ -419,11 +420,18 @@ func (s *Server) Redirect(raw string) {
 // Note sets the line above the list ("Reading your list…").
 func (s *Server) Note(text string) { s.mu.Lock(); s.state.Note = text; s.mu.Unlock() }
 
+// Hold keeps the window on "Preparing" through the next SetApps until Release: the rows already up to date are settled first, so the heading and the
+// count are never drawn with a number that then changes ("Installing 3 apps", then 2).
+func (s *Server) Hold() { s.mu.Lock(); s.hold = true; s.mu.Unlock() }
+
+// Release ends Hold: the list is shown.
+func (s *Server) Release() { s.mu.Lock(); s.hold = false; s.state.Preparing = false; s.mu.Unlock() }
+
 // SetApps lists the apps, all queued.
 func (s *Server) SetApps(names []string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.state.Preparing = false
+	s.state.Preparing = s.hold
 	s.state.Rows = make([]Row, len(names))
 	for i := range names {
 		s.ask[i] = make(chan string, 1)

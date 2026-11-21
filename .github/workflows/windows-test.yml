@@ -498,6 +498,8 @@ jobs:
           @{ code = 'cccc3333'; os = 'windows'; apps = @($a) } | ConvertTo-Json -Depth 5 | Set-Content C:\ftest\www\setup\manifest\cccc3333 -Encoding utf8
           $b = $a.Clone(); $b.id = 1; $b.name = 'Test Install'; $b.silent_switch = '/S /CODE={FILEION-TEST-1}'; $b.product_code = '{FILEION-TEST-1}'; $b.winget_id = 'Test.1'
           @{ code = 'aaaa1111'; os = 'windows'; apps = @($b) } | ConvertTo-Json -Depth 5 | Set-Content C:\ftest\www\setup\manifest\aaaa1111 -Encoding utf8
+          $pp = $a.Clone(); $pp.id = 11; $pp.name = 'Test Portable'; $pp.winget_id = 'Test.11'; $pp.mode = 'portable'; $pp.installer_type = 'portable'; $pp.silent_switch = ''; $pp.product_code = $null
+          @{ code = 'pppp1111'; os = 'windows'; apps = @($pp) } | ConvertTo-Json -Depth 5 | Set-Content C:\ftest\www\setup\manifest\pppp1111 -Encoding utf8
           Start-Process C:\ftest\testserver.exe -ArgumentList '-addr','127.0.0.1:8443','-dir','C:\ftest\www','-cert','C:\ftest\cert.pem','-key','C:\ftest\key.pem' -RedirectStandardError C:\ftest\out\server.log -WindowStyle Hidden
           Start-Sleep 3
           Add-Type -AssemblyName System.Drawing
@@ -554,6 +556,14 @@ jobs:
           }
           Shot 'cccc3333' 'window-running' 8
           Shot 'aaaa1111' 'window-finished' 14
+          # the same set a second time: the portable app is saved, so its row says Up to date and keeps Run, Add to Start menu and Move (window-rerun.png); the log has the margins of that run
+          Shot 'pppp1111' 'window-first' 12
+          Shot 'pppp1111' 'window-rerun' 12
+          foreach ($f in "$env:TEMP\fileion-installer.log", "$env:RUNNER_TEMP\fileion-installer.log") { if (Test-Path $f) { Copy-Item $f C:\ftest\out\window-rerun.log -ErrorAction SilentlyContinue; break } }
+          $rl = Get-Content C:\ftest\out\window-rerun.log -Raw -ErrorAction SilentlyContinue
+          (($rl -split "`n") | Where-Object { $_ -match 'window position:|Test Portable' }) | ForEach-Object { "rerun log: $_" } | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          if ($rl -notmatch 'Test Portable: up-to-date') { Write-Error "the second run did not skip the saved portable app"; exit 1 }
+          if (-not (Test-Path C:\ftest\out\window-rerun.png)) { Write-Error "no window-rerun.png"; exit 1 }
           foreach ($f in "$env:TEMP\fileion-installer.log", "$env:RUNNER_TEMP\fileion-installer.log") { if (Test-Path $f) { Copy-Item $f C:\ftest\out\window-installer.log -ErrorAction SilentlyContinue; break } }   # has the 'window fit:' lines
           $wl = Get-Content C:\ftest\out\window-installer.log -Raw -ErrorAction SilentlyContinue
           (($wl -split "`n") | Where-Object { $_ -match 'edge args:|edge sign-in:|window position:' }) | ForEach-Object { "log: $_" } | Tee-Object -Append $env:GITHUB_STEP_SUMMARY

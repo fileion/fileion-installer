@@ -215,6 +215,7 @@ func main() {
 	for i, a := range m.Apps {
 		names[i] = ui.Sanitize(a.Name)
 	}
+	win.Hold() // "Preparing" until the up-to-date rows are settled (Release below)
 	win.SetApps(names)
 	for i, a := range m.Apps {
 		k, icon := a.EffectiveMode(), ui.SafeIcon(a.Icon)
@@ -237,6 +238,7 @@ func main() {
 	for i := 0; i < nCurrent; i++ { // the rows already up to date are settled first, so the heading counts only what will run
 		results[i] = r.RunAppAhead(ctx, m.Apps[i], nil)
 	}
+	win.Release()
 	runRows := func(only func(run.Result) bool) {
 		// the next apps download while the current one installs; installs stay one at a time, in order
 		ahead := r.NewAhead(ctx, m.Apps)

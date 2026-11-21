@@ -474,3 +474,19 @@ func TestOnlyHttpsAddressesGoToTheDefaultBrowserAndOnlyByPost(t *testing.T) {
 	default:
 	}
 }
+
+func TestHoldKeepsPreparingUntilReleaseSoTheCountIsNeverDrawnTwice(t *testing.T) {
+	s, _, err := New(t.TempDir()+"/log", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Hold()
+	s.SetApps([]string{"A", "B"})
+	if !s.state.Preparing {
+		t.Fatal("must stay on Preparing while the up-to-date rows are settled")
+	}
+	s.Release()
+	if s.state.Preparing || len(s.state.Rows) != 2 {
+		t.Fatal("Release shows the list")
+	}
+}
