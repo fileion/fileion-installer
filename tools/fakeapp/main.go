@@ -4,7 +4,8 @@
 //	fakeapp /S /CODE={id} /NAME=text /PUBLISHER=text /VERSION=2.0   the same with its own DisplayName and Publisher
 //	fakeapp /HANG                        never returns, like an installer waiting on a hidden window
 //
-// An "a few clicks" app is started with no switch at all, so what it does comes from the NAME of the copy of this file (the test server serves copies):
+// An "a few clicks" app is started with no switch at all, so what it does comes from the NAME of the copy of this file (the test server serves copies),
+// or from C:\ftest\mode.txt when the copy is a fileion-*.exe temp file (see modeFor):
 //
 //	int-ok.exe     like a vendor setup that starts the real setup and exits at once: the child waits for the marker file C:\ftest\marker-ok (the person
 //	               finishing) and then writes the Uninstall entry {FILEION-INT-OK}
@@ -19,12 +20,34 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
 
+// modeFor is the mode this copy runs in. The installer saves an "a few clicks" setup as a temp file named fileion-*.exe, so its own name says nothing: for such a
+// copy, started with no switch (or as its own /CHILD or /LINGER), the harness names the mode in C:\ftest\mode.txt. Every run appends "fakeapp mode=<x>" to
+// C:\ftest\out\fakeapp-modes.log, so a case can check its fake really ran in that mode.
+func modeFor() string {
+	exe := strings.ToLower(filepath.Base(os.Args[0]))
+	if strings.HasPrefix(exe, "fileion-") && (len(os.Args) == 1 || os.Args[1] == "/CHILD" || os.Args[1] == "/LINGER") {
+		if b, err := os.ReadFile(`C:\ftest\mode.txt`); err == nil {
+			exe = strings.ToLower(strings.TrimSpace(string(b)))
+		}
+	}
+	if f, err := os.OpenFile(`C:\ftest\out\fakeapp-modes.log`, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+		role := ""
+		if len(os.Args) > 1 && (os.Args[1] == "/CHILD" || os.Args[1] == "/LINGER") {
+			role = " role=" + strings.TrimPrefix(os.Args[1], "/")
+		}
+		f.WriteString("fakeapp mode=" + exe + role + " pid=" + strconv.Itoa(os.Getpid()) + "\n")
+		f.Close()
+	}
+	return exe
+}
+
 func main() {
-	switch exe := strings.ToLower(filepath.Base(os.Args[0])); {
+	switch exe := modeFor(); {
 	case strings.HasPrefix(exe, "int-closed"):
 		return
 	case strings.HasPrefix(exe, "int-hang"):

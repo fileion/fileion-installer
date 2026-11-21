@@ -101,6 +101,7 @@ jobs:
           Write-Manifest 'eeee6666' (MatchApp 6 'Test Match Update' '2.0' @{ name = 'Fileion Matchtest '; publisher = 'Fileion Test' } '/S /CODE={FILEION-MATCH-NEW} /NAME=Fileion_Matchtest_2.0 /PUBLISHER=Fileion_Test /VERSION=2.0')
           Write-Manifest 'ffff7777' (MatchApp 7 'Test Match HKCU' '4.0' @{ name = 'Fileion Hkcutest'; publisher = 'Fileion Test HKCU' } '/S /CODE={FILEION-MATCH-HKCU}')
       - name: Run the v0.3.0 cases
+        id: v030
         if: always()
         continue-on-error: true
         timeout-minutes: 25
@@ -146,7 +147,13 @@ jobs:
             $log = Join-Path $env:TEMP 'fileion-installer.log'
             $un = 'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall'
             function Wait-Log($pattern, $secs) { $end = (Get-Date).AddSeconds($secs); while ((Get-Date) -lt $end) { if ((Get-Content $log -Raw -ErrorAction SilentlyContinue) -match $pattern) { return $true }; Start-Sleep -Milliseconds 300 }; $false }
-            function Start-Inst($code, $name) { Reap; Remove-Item $log -ErrorAction SilentlyContinue; "$(Get-Date -Format o) Start-Inst $code $name" | Add-Content C:\ftest\out\progress.txt; $q = Start-Process $installer -ArgumentList ($common + @('-code', $code)) -PassThru -WindowStyle Hidden -RedirectStandardOutput "C:\ftest\out\$name.txt"; $null = $q.Handle; $script:Started += $q; $q }
+            $modes = 'C:\ftest\out\fakeapp-modes.log'
+            # the fake setup is a temp file named fileion-*.exe, so its mode comes from C:\ftest\mode.txt; every case checks its fake REALLY ran in that mode
+            function Fakes($m) { @(Get-Content $modes -ErrorAction SilentlyContinue | Where-Object { $_ -match "mode=$m( |$)" } | ForEach-Object { [int]($_ -replace '.*pid=', '') }) }
+            function Alive($m) { @(Fakes $m | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue }).Count }
+            function Kill-Fakes { Get-Content $modes -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id ([int]($_ -replace '.*pid=', '')) -Force -ErrorAction SilentlyContinue }; Remove-Item C:\ftest\mode.txt -ErrorAction SilentlyContinue }
+            function Skip($name, $detail) { $script:rows += "| $name | SKIP (runner) | $detail |" }
+            function Start-Inst($code, $name, $mode = '') { Reap; Kill-Fakes; Remove-Item $modes -ErrorAction SilentlyContinue; if ($mode) { Set-Content C:\ftest\mode.txt $mode } else { Remove-Item C:\ftest\mode.txt -ErrorAction SilentlyContinue }; Remove-Item $log -ErrorAction SilentlyContinue; "$(Get-Date -Format o) Start-Inst $code $name" | Add-Content C:\ftest\out\progress.txt; $q = Start-Process $installer -ArgumentList ($common + @('-code', $code)) -PassThru -WindowStyle Hidden -RedirectStandardOutput "C:\ftest\out\$name.txt"; $null = $q.Handle; $script:Started += $q; $q }
             function Window-Url { ([regex]::Match((Get-Content $log -Raw), 'window: (http://127\.0\.0\.1:\d+/t/[0-9a-f]+/)')).Groups[1].Value }
 
             # 11. no console window: a GUI program (PE subsystem 2) with no console child while it works
@@ -173,45 +180,47 @@ jobs:
 
             # 14. interactive: runs after the silent app; the setup starts the real setup and exits (the whole process tree is waited for); the person finishes it
             Remove-Item C:\ftest\marker-ok -ErrorAction SilentlyContinue; reg delete "HKLM\$un\{FILEION-INT-OK}" /f 2>$null | Out-Null
-            $p = Start-Inst 'iiii3333' 'case14-interactive'
+            $p = Start-Inst 'iiii3333' 'case14-interactive' 'int-ok'
             $turn = Wait-Log 'yourturn' 60
+            Start-Sleep 3; $waiting = (Alive 'int-ok') -ge 1 -and (Get-Content $log -Raw) -notmatch 'notfinished'   # the fake setup is alive and the row has not given up
             $early = (Get-Content $log -Raw) -notmatch 'Test Interactive: done'
             New-Item C:\ftest\marker-ok -ItemType File -Force | Out-Null   # the person finishes the setup
             $ended = $p.WaitForExit(60000)
             $lg = Get-Content $log -Raw -ErrorAction SilentlyContinue
             $order = $lg.IndexOf('Test Silent Last: done') -ge 0 -and $lg.IndexOf('Test Silent Last: done') -lt $lg.IndexOf('Test Interactive: yourturn')
-            Check 'interactive: runs last, waits for the whole setup, then Done' ($turn -and $early -and $ended -and $order -and $p.ExitCode -eq 0 -and (Key '{FILEION-INT-OK}')) "your turn: $turn, ended: $ended, order ok: $order, key: $(Key '{FILEION-INT-OK}')"
+            Check 'interactive: runs last, waits for the whole setup, then Done' ((Fakes 'int-ok').Count -ge 1 -and $waiting -and $turn -and $early -and $ended -and $order -and $p.ExitCode -eq 0 -and (Key '{FILEION-INT-OK}')) "fake ran: $((Fakes 'int-ok').Count), waiting: $waiting, your turn: $turn, ended: $ended, order ok: $order, key: $(Key '{FILEION-INT-OK}')"
 
             # 15. interactive, setup closed without installing: Not finished; Skip (POST on the window's address) moves on, nothing is a failure
-            $p = Start-Inst 'iiii4444' 'case15-closed'
+            $p = Start-Inst 'iiii4444' 'case15-closed' 'int-closed'
             $nf = Wait-Log 'notfinished' 60
             $url = Window-Url
             if ($url) { Invoke-WebRequest "${url}row/skip?i=0" -Method Post -UseBasicParsing | Out-Null }
             $ended = $p.WaitForExit(30000)
-            Check 'interactive: setup closed early is Not finished, Skip ends it, no failure' ($nf -and $ended -and $p.ExitCode -eq 0 -and ((Get-Content C:\ftest\out\case15-closed.txt -Raw) -match 'skipped')) "not finished: $nf, ended: $ended"
+            Check 'interactive: setup closed early is Not finished, Skip ends it, no failure' ((Fakes 'int-closed').Count -eq 1 -and $nf -and $ended -and $p.ExitCode -eq 0 -and ((Get-Content C:\ftest\out\case15-closed.txt -Raw) -match 'skipped')) "fake ran: $((Fakes 'int-closed').Count), not finished: $nf, ended: $ended"
 
             # 16. interactive setup that never returns: Skip ends the whole job, nothing is left running
-            $p = Start-Inst 'iiii5555' 'case16-hang'
+            $p = Start-Inst 'iiii5555' 'case16-hang' 'int-hang'
             $turn = Wait-Log 'yourturn' 60
+            Start-Sleep 3; $waiting = (Alive 'int-hang') -eq 1 -and (Get-Content $log -Raw) -notmatch 'notfinished'   # still waiting, not given up
             $url = Window-Url
             if ($url) { Invoke-WebRequest "${url}row/skip?i=0" -Method Post -UseBasicParsing | Out-Null }
             $ended = $p.WaitForExit(30000)
-            $left = @(Get-Process -Name 'int-hang' -ErrorAction SilentlyContinue).Count
-            Check 'interactive: Skip ends a setup that never returns' ($turn -and $ended -and $left -eq 0) "ended: $ended, processes left: $left"
+            $left = Alive 'int-hang'
+            Check 'interactive: Skip ends a setup that never returns' ((Fakes 'int-hang').Count -eq 1 -and $waiting -and $turn -and $ended -and $left -eq 0) "fake ran: $((Fakes 'int-hang').Count), waiting: $waiting, ended: $ended, processes left: $left"
 
             # 17. the hash is checked before a setup window opens
             $bad = Get-Content C:\ftest\www\setup\manifest\iiii4444 -Raw | ConvertFrom-Json; $bad.apps[0].sha256 = ('0' * 64); $bad.code = 'iiii7777'
             $bad | ConvertTo-Json -Depth 5 | Set-Content C:\ftest\www\setup\manifest\iiii7777 -Encoding utf8
             $out = Inst $installer ($common + @('-code','iiii7777')); $c17 = $script:LASTEXIT
-            Check 'interactive: a wrong hash is refused before any setup window opens' ($c17 -eq 1 -and $out -match 'mismatch' -and $out -notmatch 'yourturn') "exit $c17"
+            Check 'interactive: a wrong hash is refused before any setup window opens' ($c17 -eq 1 -and -not (Test-Path $modes) -and (Fakes '.*').Count -eq 0 -and $out -match 'mismatch' -and $out -notmatch 'yourturn') "exit $c17"
 
             # 18a. a setup that installs, launches the app and exits: its job never empties, so the installer must go on (Done) after a short grace, and NOT kill the app
-            Get-Process -Name 'int-linger' -ErrorAction SilentlyContinue | Stop-Process -Force
-            $p = Start-Inst 'iiii8888' 'case18a-linger'
+            Kill-Fakes
+            $p = Start-Inst 'iiii8888' 'case18a-linger' 'int-linger'
             $ended = $p.WaitForExit(120000)
-            $alive = @(Get-Process -Name 'int-linger' -ErrorAction SilentlyContinue).Count
-            Get-Process -Name 'int-linger' -ErrorAction SilentlyContinue | Stop-Process -Force
-            Check 'interactive: a setup that leaves the launched app running is Done, and the app is not killed' ($ended -and $p.ExitCode -eq 0 -and ((Get-Content C:\ftest\out\case18a-linger.txt -Raw) -match 'done') -and $alive -ge 1) "ended: $ended, app still running: $alive"
+            $alive = Alive 'int-linger'; $ran = (Fakes 'int-linger').Count
+            Kill-Fakes
+            Check 'interactive: a setup that leaves the launched app running is Done, and the app is not killed' ($ended -and $p.ExitCode -eq 0 -and ((Get-Content C:\ftest\out\case18a-linger.txt -Raw) -match 'done') -and $ran -ge 2 -and $alive -ge 1) "fake ran (setup + app): $ran, ended: $ended, app still running: $alive"
 
             # 18b. hand-off: the elevated copy writes its window's address to the file it was given
             Remove-Item C:\ftest\h.txt -ErrorAction SilentlyContinue
@@ -223,22 +232,28 @@ jobs:
             Remove-Item "$apps\Test Marker", C:\ftest\moveto, C:\ftest\run-marker.txt -Recurse -Force -ErrorAction SilentlyContinue
             New-Item -ItemType Directory -Force C:\ftest\moveto | Out-Null
             $env:FILEION_INSTALLER_TEST_PICK = 'C:\ftest\moveto'
-            $p = Start-Inst 'mmmm1111' 'case18c-buttons'
+            $p = Start-Inst 'mmmm1111' 'case18c-buttons' 'int-hang'
             $turn = Wait-Log 'yourturn' 60
+            Start-Sleep 3; $waiting = (Alive 'int-hang') -eq 1 -and (Get-Content $log -Raw) -notmatch 'notfinished'
             $url = Window-Url
             Invoke-WebRequest "${url}row/run?i=0" -Method Post -UseBasicParsing | Out-Null
             $end = (Get-Date).AddSeconds(30); while (-not (Test-Path C:\ftest\run-marker.txt) -and (Get-Date) -lt $end) { Start-Sleep -Milliseconds 300 }
             $level = Get-Content C:\ftest\run-marker.txt -Raw -ErrorAction SilentlyContinue
-            Check 'Run starts a portable app as the normal user, not as administrator' ($turn -and $level -eq 'medium') "started at the $level level"
+            $lua = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -ErrorAction SilentlyContinue).EnableLUA
+            $mine = if ((whoami /groups) -match 'High Mandatory Level') { 'high' } else { 'medium' }
+            "runner: EnableLUA=$lua, this shell runs at the $mine level" | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+            if ($lua -eq 0) { Skip 'Run starts a portable app as the normal user, not as administrator' "the runner has UAC off (EnableLUA=0): there is no normal level to drop to; the app started at the $level level" }
+            else { Check 'Run starts a portable app as the normal user, not as administrator' ($turn -and $level -eq 'medium') "EnableLUA=$lua, runner shell $mine, started at the $level level" }
             Invoke-WebRequest "${url}row/move?i=0" -Method Post -UseBasicParsing | Out-Null
             $end = (Get-Date).AddSeconds(30); while (-not (Test-Path 'C:\ftest\moveto\Test Marker\run-marker.exe') -and (Get-Date) -lt $end) { Start-Sleep -Milliseconds 300 }
-            $listed = Select-String -Path "$env:LOCALAPPDATA\Fileion\portable.json" -Pattern 'moveto' -Quiet
+            $end = (Get-Date).AddSeconds(10); do { $listed = Select-String -Path "$env:LOCALAPPDATA\Fileion\portable.json" -Pattern 'moveto' -Quiet -ErrorAction SilentlyContinue; if (-not $listed) { Start-Sleep -Milliseconds 300 } } while (-not $listed -and (Get-Date) -lt $end)
             Check 'Move puts the app in the chosen folder and the list follows it' ((Test-Path 'C:\ftest\moveto\Test Marker\run-marker.exe') -and -not (Test-Path "$apps\Test Marker") -and $listed) "moved: $(Test-Path 'C:\ftest\moveto\Test Marker\run-marker.exe'), listed: $listed"
             Remove-Item Env:FILEION_INSTALLER_TEST_PICK -ErrorAction SilentlyContinue
             Invoke-WebRequest "${url}stop" -Method Post -UseBasicParsing | Out-Null
             $ended = $p.WaitForExit(30000)
-            $left = @(Get-Process -Name 'int-hang' -ErrorAction SilentlyContinue).Count
-            Check 'Stop ends an open setup, says Stopped and leaves nothing running' ($ended -and $p.ExitCode -eq 0 -and ((Get-Content C:\ftest\out\case18c-buttons.txt -Raw) -match 'cancelled') -and $left -eq 0) "ended: $ended, processes left: $left"
+            $left = Alive 'int-hang'
+            Check 'Stop ends an open setup, says Stopped and leaves nothing running' ((Fakes 'int-hang').Count -eq 1 -and $waiting -and $ended -and $p.ExitCode -eq 0 -and ((Get-Content C:\ftest\out\case18c-buttons.txt -Raw) -match 'cancelled') -and $left -eq 0) "fake ran: $((Fakes 'int-hang').Count), waiting: $waiting, ended: $ended, processes left: $left"
+            Kill-Fakes
             Remove-Item Env:FILEION_INSTALLER_ELEVATED -ErrorAction SilentlyContinue
           }
 
@@ -257,6 +272,7 @@ jobs:
           "### v0.3.0 cases`n| Case | Result | Detail |`n|---|---|---|`n$($rows -join "`n")" | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           if ($fail.Count) { Write-Error "Failed: $($fail -join '; ')"; exit 1 }
       - name: Run the cases
+        id: old
         if: always()
         continue-on-error: true
         timeout-minutes: 25
@@ -436,6 +452,12 @@ jobs:
         with:
           name: installer-cases
           path: C:\ftest\out\
+      - name: Fail the job if any case failed or timed out
+        if: always() && (steps.v030.outcome != 'success' || steps.old.outcome != 'success')
+        shell: pwsh
+        run: |
+          "v0.3.0 cases: ${{ steps.v030.outcome }}, old cases: ${{ steps.old.outcome }}" | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          exit 1
 
   wait-detect:
     # the friend-PC bug: Notepad++ and VLC stayed on "Installing" although they were installed. A fresh build runs the real vendor installers
