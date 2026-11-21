@@ -10,10 +10,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"fileion-installer/internal/manifest"
+	"fileion-installer/internal/match"
 )
 
 func sum(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }
@@ -279,5 +282,221 @@ func TestADownloadSaysItIsTheInstallerNotABrowser(t *testing.T) {
 
 	if ua != UserAgent {
 		t.Fatalf("User-Agent = %q", ua)
+	}
+}
+
+// A name rule instead of a product code: old -> the run updates it, the next run skips it; Opera next to Opera GX stay apart.
+func TestAnAppFoundByItsNameRuleIsUpdatedThenSkipped(t *testing.T) {
+	s := &spy{}
+	body := []byte("the new installer")
+	srv := server(t, body, s)
+	installed := []match.Entry{{Name: "Opera GX Stable 117.0.1", Publisher: "Opera Software", Version: "117.0.1"}, {Name: "Opera Stable 117.0.1", Publisher: "Opera Software", Version: "117.0.1"}}
+	find := func(a manifest.App) (string, bool) {
+		if a.Match == nil {
+			return "", false
+		}
+		return match.Find(installed, *a.Match)
+	}
+	r := newRunner(t, srv, find, s)
+	r.Exec = func(ctx context.Context, name string, args []string) error { // running the installer updates the entry
+		s.execs = append(s.execs, append([]string{name}, args...))
+		if len(installed) > 1 {
+			installed[1].Version, installed[1].Name = "118.0.2", "Opera Stable 118.0.2"
+		}
+		return nil
+	}
+	opera := app(srv, sum(body))
+	opera.Version, opera.MinVersion = "118.0.2", "118.0.2"
+	opera.Match = &manifest.Match{Name: "Opera Stable ", Publisher: "Opera Software"}
+
+	if res := r.RunApp(context.Background(), opera); res.Status != Done || len(s.execs) != 1 {
+		t.Fatalf("old install: %s (%d runs)", res.Status, len(s.execs))
+	}
+	if res := r.RunApp(context.Background(), opera); res.Status != UpToDate || len(s.execs) != 1 || !strings.Contains(res.Message, "118.0.2") {
+		t.Fatalf("second run: %s %q (%d runs)", res.Status, res.Message, len(s.execs))
+	}
+	// Opera GX, still at 117.0.1, is only ever compared with its own row
+	gx := opera
+	gx.Version, gx.MinVersion = "118.0.2", "118.0.2"
+	gx.Match = &manifest.Match{Name: "Opera GX Stable ", Publisher: "Opera Software"}
+	if res := r.RunApp(context.Background(), gx); res.Status != Done || len(s.execs) != 2 {
+		t.Fatalf("Opera GX is older and must be updated: %s", res.Status)
+	}
+	// not installed at all: installed
+	installed = nil
+	if res := r.RunApp(context.Background(), opera); res.Status != Done || len(s.execs) != 3 {
+		t.Fatalf("not installed: %s", res.Status)
+	}
+	// a version that cannot be read is updated, never skipped
+	installed = []match.Entry{{Name: "Opera Stable ?", Publisher: "Opera Software", Version: "unknown"}}
+	if res := r.RunApp(context.Background(), opera); res.Status != Done {
+		t.Fatalf("unparsable version: %s", res.Status)
+	}
+}
+
+func TestAPanicInOneAppIsLoggedAndTheNextAppStillRuns(t *testing.T) {
+	s := &spy{}
+	body := []byte("installer")
+	srv := server(t, body, s)
+	var logged string
+	boom := func(a manifest.App) (string, bool) {
+		if a.Name == "Boom" {
+			panic("registry went wrong")
+		}
+		return "", false
+	}
+	r := newRunner(t, srv, boom, s)
+	r.Log = func(f string, args ...any) { logged += fmt.Sprintf(f, args...) }
+	var told []Status
+	r.Progress = func(a manifest.App, st Status, msg, link string) { told = append(told, st) }
+
+	bad := app(srv, sum(body))
+	bad.Name = "Boom"
+	res := r.RunApp(context.Background(), bad)
+	if res.Status != Failed || !res.Bad() || !strings.Contains(res.Message, "internal error") {
+		t.Fatalf("panic result: %+v", res)
+	}
+	if !strings.Contains(logged, "PANIC registry went wrong") || !strings.Contains(logged, "goroutine") {
+		t.Errorf("the panic and its stack are in the log: %q", logged)
+	}
+	if next := r.RunApp(context.Background(), app(srv, sum(body))); next.Status != Done {
+		t.Errorf("the next app still runs: %s", next.Status)
+	}
+	if len(told) == 0 || told[0] != Failed {
+		t.Errorf("the window is told: %v", told)
+	}
+}
+
+func TestADownloadReportsItsBytesAndTheTotal(t *testing.T) {
+	s := &spy{}
+	body := make([]byte, 300_000)
+	srv := server(t, body, s)
+	r := newRunner(t, srv, notInstalled, s)
+	var lastDone, lastTotal int64
+	calls := 0
+	r.Transfer = func(a manifest.App, done, total int64) { calls++; lastDone, lastTotal = done, total }
+
+	if res := r.RunApp(context.Background(), app(srv, sum(body))); res.Status != Done {
+		t.Fatalf("status %s", res.Status)
+	}
+	if calls == 0 || lastDone != int64(len(body)) {
+		t.Errorf("transfer: %d calls, last %d of %d", calls, lastDone, lastTotal)
+	}
+	if lastTotal < 0 {
+		t.Errorf("an unknown total is 0, not %d", lastTotal)
+	}
+}
+
+// An installer that never returns although the app is installed (a hidden prompt, a child left alive): the app is detected in the registry
+// while it runs, counted as installed, and the installer is left running, not killed.
+func TestAnInstallerThatNeverReturnsIsDetectedWhileItRunsAndLeftAlone(t *testing.T) {
+	s := &spy{}
+	body := []byte("setup that never ends")
+	srv := server(t, body, s)
+	var polls int32
+	installed := func(manifest.App) (string, bool) {
+		if atomic.AddInt32(&polls, 1) < 3 {
+			return "", false // not there yet
+		}
+		return "2.0.0", true // registered after a few polls
+	}
+	r := newRunner(t, srv, installed, s)
+	r.PollEvery, r.Grace = 10*time.Millisecond, 50*time.Millisecond
+	var killed int32
+	r.Exec = func(ctx context.Context, name string, args []string) error {
+		<-ctx.Done() // never returns on its own
+		atomic.StoreInt32(&killed, 1)
+		return ctx.Err()
+	}
+	var logged string
+	var mu sync.Mutex
+	r.Log = func(f string, a ...any) { mu.Lock(); logged += fmt.Sprintf(f, a...) + "\n"; mu.Unlock() }
+
+	start := time.Now()
+	res := r.RunApp(context.Background(), app(srv, sum(body)))
+	if res.Status != Done || !res.OK() || !strings.Contains(res.Message, "installer is still open") {
+		t.Fatalf("result %+v", res)
+	}
+	if time.Since(start) > 5*time.Second {
+		t.Errorf("took %v: it waited for the time limit", time.Since(start))
+	}
+	time.Sleep(50 * time.Millisecond)
+	if atomic.LoadInt32(&killed) != 0 {
+		t.Error("the vendor installer was ended in the middle of its clean-up; it must be left running")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !strings.Contains(logged, "detected as installed at 2.0.0") || !strings.Contains(logged, "left running") {
+		t.Errorf("the log says what happened: %q", logged)
+	}
+}
+
+func TestAnInstallerThatEndsDuringTheGraceIsSimplyDoneWithItsExitCodeLogged(t *testing.T) {
+	s := &spy{}
+	body := []byte("setup")
+	srv := server(t, body, s)
+	r := newRunner(t, srv, func(manifest.App) (string, bool) { return "2.0.0", true }, s)
+	r.PollEvery, r.Grace = 5*time.Millisecond, time.Second
+	r.Exec = func(ctx context.Context, name string, args []string) error {
+		time.Sleep(60 * time.Millisecond)
+		return nil
+	}
+	var logged string
+	r.Log = func(f string, a ...any) { logged += fmt.Sprintf(f, a...) + "\n" }
+	// the "already installed" check at the start would skip it, so the first look says no and the polls say yes
+	var first int32
+	r.Installed = func(manifest.App) (string, bool) {
+		if atomic.AddInt32(&first, 1) == 1 {
+			return "", false
+		}
+		return "2.0.0", true
+	}
+	res := r.RunApp(context.Background(), app(srv, sum(body)))
+	if res.Status != Done || strings.Contains(res.Message, "still open") {
+		t.Fatalf("result %+v", res)
+	}
+	if !strings.Contains(logged, "exited after") || !strings.Contains(logged, "code 0") {
+		t.Errorf("exit code and time are logged: %q", logged)
+	}
+}
+
+func TestAnInstallerNotDetectedAfterAMinuteSaysItMayBeWaitingAndIsStoppedAtTheLimit(t *testing.T) {
+	s := &spy{hang: true}
+	body := []byte("setup with a hidden prompt")
+	srv := server(t, body, s)
+	r := newRunner(t, srv, notInstalled, s)
+	r.PollEvery, r.WaitHint, r.AppTimeout = 5*time.Millisecond, 30*time.Millisecond, 150*time.Millisecond
+	var said []string
+	var mu sync.Mutex
+	r.Progress = func(a manifest.App, st Status, msg, link string) { mu.Lock(); said = append(said, msg); mu.Unlock() }
+	res := r.RunApp(context.Background(), app(srv, sum(body)))
+	if res.Status != Manual {
+		t.Fatalf("status %s", res.Status)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	waiting := false
+	for _, m := range said {
+		waiting = waiting || strings.Contains(m, "may be waiting for you")
+	}
+	if !waiting {
+		t.Errorf("the window was never told the installer may be waiting: %v", said)
+	}
+}
+
+func TestAnInstallerThatExitsNonZeroButLeftTheAppInstalledIsDone(t *testing.T) {
+	s := &spy{}
+	body := []byte("setup that wants a restart")
+	srv := server(t, body, s)
+	var n int32
+	r := newRunner(t, srv, func(manifest.App) (string, bool) {
+		if atomic.AddInt32(&n, 1) == 1 {
+			return "", false
+		}
+		return "2.0.0", true
+	}, s)
+	r.Exec = func(ctx context.Context, name string, args []string) error { return fmt.Errorf("exit status 3010") }
+	if res := r.RunApp(context.Background(), app(srv, sum(body))); res.Status != Done {
+		t.Fatalf("a non-zero exit with the app installed: %+v", res)
 	}
 }

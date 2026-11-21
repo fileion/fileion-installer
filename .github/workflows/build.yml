@@ -45,6 +45,13 @@ jobs:
           [ "$(head -c2 dist/Fileion-Installer.exe)" = MZ ]
           [ "$(head -c4 dist/Fileion-Installer | tail -c3)" = ELF ]
           ! cmp -s dist/Fileion-Installer.exe dist/Fileion-Installer
+      - name: Check the icon and version info are in the .exe (UTF-16 strings of the version resource)
+        run: |
+          for t in "Fileion Installer" "Fileion-Installer.exe" "© Fileion"; do
+            p=$(printf '%s' "$t" | iconv -f UTF-8 -t UTF-16LE | od -An -v -tx1 | tr -d ' \n')
+            od -An -v -tx1 dist/Fileion-Installer.exe | tr -d ' \n' | grep -q "$p" || { echo "missing in the .exe: $t"; exit 1; }
+          done
+          ! od -An -v -tx1 dist/Fileion-Installer | tr -d ' \n' | grep -q "$(printf 'Fileion-Installer.exe' | iconv -f UTF-8 -t UTF-16LE | od -An -v -tx1 | tr -d ' \n')"  # not in the Linux file
       - name: Pack the AppImage (appimagetool is pinned by SHA-256)
         run: |
           sudo apt-get install -y --no-install-recommends desktop-file-utils > /dev/null
@@ -52,7 +59,7 @@ jobs:
           cp dist/Fileion-Installer AppDir/usr/bin/fileion-installer
           cp packaging/AppRun AppDir/AppRun && chmod +x AppDir/AppRun
           cp packaging/fileion-installer.desktop AppDir/
-          printf '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#1d4ed8"/></svg>' > AppDir/fileion-installer.svg
+          cp packaging/fileion-installer.png AppDir/fileion-installer.png && cp packaging/fileion-installer.png AppDir/.DirIcon
           curl -fsSL -o appimagetool "https://github.com/AppImage/appimagetool/releases/download/1.9.0/appimagetool-x86_64.AppImage"
           echo "46fdd785094c7f6e545b61afcfb0f3d98d8eab243f644b4b17698c01d06083d1  appimagetool" | sha256sum -c -
           chmod +x appimagetool
@@ -65,3 +72,13 @@ jobs:
             dist/Fileion-Installer.exe
             dist/Fileion-Installer.AppImage
             dist/SHA256SUMS
+      - name: A stamped AppImage reads its code (the stamp is appended after the image; $APPIMAGE points at the file)
+        run: |
+          go build -o stamp ./tools/stamp
+          ./stamp -code 3fa91c0b dist/Fileion-Installer.AppImage "My special bundle.AppImage"
+          chmod +x "My special bundle.AppImage"
+          rm -f /tmp/fileion-installer.log
+          ./"My special bundle.AppImage" --appimage-extract-and-run -no-window -base https://127.0.0.1:1 || true
+          grep -q 'code 3fa91c0b (from the stamp)' /tmp/fileion-installer.log || { cat /tmp/fileion-installer.log; exit 1; }
+          ./stamp -strip "My special bundle.AppImage" stripped.AppImage
+          cmp stripped.AppImage dist/Fileion-Installer.AppImage && echo "the stripped copy is the release file"

@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // App is one title. Windows entries carry URL, SHA256 and SilentSwitch; Linux entries carry FlatpakID.
@@ -29,6 +30,15 @@ type App struct {
 	WingetID      string `json:"winget_id"`
 	FlatpakID     string `json:"flatpak_id"`
 	Page          string `json:"page"` // the app's Fileion download page
+	// Match finds an installed copy when its Uninstall key name changes with every release: DisplayName starts with Name and Publisher is
+	// equal. Both are always set when the manifest sends it.
+	Match *Match `json:"match,omitempty"`
+}
+
+// Match is the name rule of an app whose Windows Uninstall key is not stable.
+type Match struct {
+	Name      string `json:"name"`
+	Publisher string `json:"publisher"`
 }
 
 // Manifest is the answer of /setup/manifest/{code}.
@@ -40,21 +50,28 @@ type Manifest struct {
 
 var codeRe = regexp.MustCompile(`^[a-f0-9]{8,12}$`)
 
-// CodeFromFileName takes the short code from a file name such as "Fileion-VLC-7-Zip-and-4-more-3fa91c0b.exe"
-// (also "…-3fa91c0b (1).exe" from a browser that renamed a second download). It returns "" when there is none.
+// copySuffix is what a browser or Explorer adds to a second copy: " (1)", "(2)".
+var copySuffix = regexp.MustCompile(`\s*\(\d+\)\s*$`)
+
+// CodeFromFileName takes the short code from a file name such as "Fileion-VLC-7-Zip-and-4-more-3fa91c0b.exe". It copes with what a
+// download or a rename does to the name: a copy suffix ("… (1).exe"), spaces around it, an upper-case extension, and an extension
+// written twice ("….exe.exe", from Explorer with extensions hidden). It returns "" when there is no code.
 func CodeFromFileName(path string) string {
 	name := filepath.Base(path)
-	name = strings.TrimSuffix(name, filepath.Ext(name))
-	name = strings.TrimSuffix(name, ".AppImage")
-	if i := strings.Index(name, " ("); i >= 0 {
-		name = name[:i]
-	}
-	if i := strings.LastIndex(name, "-"); i >= 0 {
-		name = name[i+1:]
-	}
-	name = strings.ToLower(name)
-	if codeRe.MatchString(name) {
-		return name
+	for i := 0; i < 6; i++ {
+		name = strings.TrimSpace(copySuffix.ReplaceAllString(strings.TrimSpace(name), ""))
+		last := name
+		if j := strings.LastIndex(name, "-"); j >= 0 {
+			last = name[j+1:]
+		}
+		if last = strings.ToLower(strings.TrimSpace(last)); codeRe.MatchString(last) {
+			return last
+		}
+		ext := filepath.Ext(name)
+		if ext == "" || ext == name {
+			return ""
+		}
+		name = strings.TrimSuffix(name, ext)
 	}
 	return ""
 }
@@ -85,20 +102,39 @@ func Parse(r io.Reader, os string) (*Manifest, error) {
 	return &m, nil
 }
 
-// Fetch downloads the manifest for a code from base (https://software.fileion.com).
+// retryDelay is the wait before the one retry of a manifest fetch (a set created a moment ago, or a brief blip); tests shorten it.
+var retryDelay = 3 * time.Second
+
+// Fetch downloads the manifest for a code from base (https://software.fileion.com). A network error, a 5xx or a 404 is tried once more
+// after a few seconds; any other answer is final.
 func Fetch(ctx context.Context, c *http.Client, base, code, os string) (*Manifest, error) {
+	m, retry, err := fetchOnce(ctx, c, base, code, os)
+	if err == nil || !retry {
+		return m, err
+	}
+	select {
+	case <-ctx.Done():
+		return nil, err
+	case <-time.After(retryDelay):
+	}
+	m, _, err = fetchOnce(ctx, c, base, code, os)
+	return m, err
+}
+
+func fetchOnce(ctx context.Context, c *http.Client, base, code, os string) (m *Manifest, retry bool, err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(base, "/")+"/setup/manifest/"+code+"?os="+os, nil)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	req.Header.Set("Accept", "application/json")
 	res, err := c.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("could not reach Fileion: %w", err)
+		return nil, ctx.Err() == nil, fmt.Errorf("could not reach Fileion: %w", err)
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Fileion has no list for this installer (HTTP %d)", res.StatusCode)
+		return nil, res.StatusCode >= 500 || res.StatusCode == http.StatusNotFound, fmt.Errorf("Fileion has no list for this installer (HTTP %d)", res.StatusCode)
 	}
-	return Parse(res.Body, os)
+	m, err = Parse(res.Body, os)
+	return m, false, err
 }

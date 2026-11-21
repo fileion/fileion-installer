@@ -1,0 +1,29 @@
+{
+  "RT_GROUP_ICON": {
+    "APP": {
+      "0000": "icon.ico"
+    }
+  },
+  "RT_VERSION": {
+    "#1": {
+      "0000": {
+        "fixed": {
+          "file_version": "@FILEVERSION@",
+          "product_version": "@FILEVERSION@"
+        },
+        "info": {
+          "0409": {
+            "CompanyName": "Fileion",
+            "FileDescription": "Fileion Installer",
+            "FileVersion": "@VERSION@",
+            "InternalName": "Fileion-Installer",
+            "LegalCopyright": "© Fileion",
+            "OriginalFilename": "Fileion-Installer.exe",
+            "ProductName": "Fileion Installer",
+            "ProductVersion": "@VERSION@"
+          }
+        }
+      }
+    }
+  }
+}
