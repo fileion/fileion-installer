@@ -1,11 +1,10 @@
 # Tests, then builds the Windows .exe and the Linux AppImage reproducibly. Only GitHub's own actions, pinned to commit SHAs.
 # Signing: the Windows .exe and the AppImage are unsigned for now.
 name: build
+# Free Actions minutes are limited (budget $0 from Dec 2026): runs only on a release tag or by hand, not on push or pull request.
 on:
   push:
-    branches: [main]
     tags: ['v*']
-  pull_request:
   workflow_dispatch:
     inputs:
       version:
