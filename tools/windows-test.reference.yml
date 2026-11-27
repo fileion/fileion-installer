@@ -1,3 +1,6 @@
+# NOT a workflow any more (moved out of .github/workflows so GitHub never runs it; no Windows runners, they bill 2x).
+# Kept as the reference for the long cases (v0.3.0 cases, window size, wait-detect, vendor, type-default): run them by hand on the Windows VM (see RELEASING.md).
+
 # Manual evidence run on a real Windows machine. Nothing here sets anything on fileion.com.
 # Job 1 runs the installer against a local https test manifest. Job 2 runs real vendor installers silently (one matrix job each).
 name: windows-test
